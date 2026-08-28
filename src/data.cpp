@@ -418,8 +418,9 @@ static void poll_tickers() {
 }
 
 // ----------------------------------------------------------------- calendar ---
-static const int  CAL_MAX = 96;
-static const int  CAL_HORIZON_DAYS = 21;
+static const int  CAL_MAX = 160;
+static const int  CAL_HORIZON_DAYS = 45;
+static bool       s_calHadGood = false;    // offline resilience: keep last-good on a transient fetch failure
 static String     s_lastCalUrl = "\x01";   // sentinel: forces the first fetch
 
 // Days-from-civil (Howard Hinnant) -> UTC epoch seconds for a Y/M/D H:M:S.
@@ -504,7 +505,7 @@ static void parse_rrule(const String &s, Rrule &rr) {
 // Recurring masters are buffered and expanded after the full feed is read, so
 // RECURRENCE-ID overrides / EXDATE cancellations (which may appear after the
 // master in the file) can suppress the right occurrence.
-struct RawMaster { String uid; String title; long dtstart; bool allDay; Rrule rr; };
+struct RawMaster { String uid; String title; String location; long dtstart; long durationSec; bool allDay; Rrule rr; };
 struct Suppress  { String uid; long epoch; };
 static const int MAST_MAX = 160;
 static const int SUPP_MAX = 256;
@@ -517,19 +518,49 @@ static bool cal_suppressed(const String &uid, long epoch) {
     return false;
 }
 
-static void cal_add(CalEvent *ev, int &n, long start, bool allDay,
-                    const String &title, long lo, long hi) {
+// Parse an ISO-8601 duration subset (P[nW][nD]T[nH][nM][nS]) to seconds.
+static long parse_ics_duration(const String &s) {
+    int i = 0, n = s.length();
+    if (!n) return 0;
+    bool neg = false;
+    if (s[i] == '+' || s[i] == '-') { neg = (s[i] == '-'); i++; }
+    if (i < n && (s[i] == 'P' || s[i] == 'p')) i++;
+    long sec = 0; bool inTime = false;
+    while (i < n) {
+        char c = s[i];
+        if (c == 'T' || c == 't') { inTime = true; i++; continue; }
+        long v = 0; bool got = false;
+        while (i < n && s[i] >= '0' && s[i] <= '9') { v = v * 10 + (s[i] - '0'); i++; got = true; }
+        if (i >= n) break;
+        char u = s[i++];
+        if (!got) continue;
+        switch (u) {
+            case 'W': case 'w': sec += v * 7 * 86400; break;
+            case 'D': case 'd': sec += v * 86400;     break;
+            case 'H': case 'h': sec += v * 3600;      break;
+            case 'M': case 'm': if (inTime) sec += v * 60; break;   // ignore month form
+            case 'S': case 's': sec += v;             break;
+        }
+    }
+    return neg ? -sec : sec;
+}
+
+static void cal_add(CalEvent *ev, int &n, long start, long end, bool allDay,
+                    const String &title, const String &location, long lo, long hi) {
     if (start < lo || start > hi || n >= CAL_MAX) return;
-    ev[n].start = start; ev[n].allDay = allDay; ev[n].title = title; n++;
+    ev[n].start = start; ev[n].end = end; ev[n].allDay = allDay;
+    ev[n].title = title; ev[n].location = location; n++;
 }
 
 // Expand a recurring master into occurrences within [lo, hi], skipping any
 // occurrence cancelled by EXDATE or replaced by a RECURRENCE-ID override.
 static void cal_expand(CalEvent *ev, int &n, const RawMaster &m, long lo, long hi) {
     long ds = m.dtstart; bool allDay = m.allDay;
-    const String &title = m.title; const Rrule &rr = m.rr;
+    const String &title = m.title; const String &loc = m.location; const Rrule &rr = m.rr;
+    long dur = m.durationSec;
+    #define CAL_END(occ) ((dur > 0) ? (occ) + dur : 0L)
     if (!rr.has) {
-        if (!cal_suppressed(m.uid, ds)) cal_add(ev, n, ds, allDay, title, lo, hi);
+        if (!cal_suppressed(m.uid, ds)) cal_add(ev, n, ds, CAL_END(ds), allDay, title, loc, lo, hi);
         return;
     }
     int made = 0, guard = 0;
@@ -537,7 +568,7 @@ static void cal_expand(CalEvent *ev, int &n, const RawMaster &m, long lo, long h
         for (long occ = ds; occ <= hi && guard < 800; occ += (long)rr.interval * 86400, guard++) {
             if (rr.count > 0 && made >= rr.count) break;
             if (rr.until > 0 && occ > rr.until) break;
-            if (!cal_suppressed(m.uid, occ)) cal_add(ev, n, occ, allDay, title, lo, hi);
+            if (!cal_suppressed(m.uid, occ)) cal_add(ev, n, occ, CAL_END(occ), allDay, title, loc, lo, hi);
             made++;
         }
     } else if (rr.freq == 'W') {
@@ -557,7 +588,7 @@ static void cal_expand(CalEvent *ev, int &n, const RawMaster &m, long lo, long h
                 if (occ < ds) continue;
                 if (rr.until > 0 && occ > rr.until) return;
                 if (rr.count > 0 && made >= rr.count) return;
-                if (!cal_suppressed(m.uid, occ)) cal_add(ev, n, occ, allDay, title, lo, hi);
+                if (!cal_suppressed(m.uid, occ)) cal_add(ev, n, occ, CAL_END(occ), allDay, title, loc, lo, hi);
                 made++;
             }
         }
@@ -570,7 +601,7 @@ static void cal_expand(CalEvent *ev, int &n, const RawMaster &m, long lo, long h
             if (occ > hi) break;
             if (rr.count > 0 && made >= rr.count) break;
             if (rr.until > 0 && occ > rr.until) break;
-            if (occ >= ds) { if (!cal_suppressed(m.uid, occ)) cal_add(ev, n, occ, allDay, title, lo, hi); made++; }
+            if (occ >= ds) { if (!cal_suppressed(m.uid, occ)) cal_add(ev, n, occ, CAL_END(occ), allDay, title, loc, lo, hi); made++; }
             mo += rr.interval; while (mo > 12) { mo -= 12; y++; }
         }
     } else if (rr.freq == 'Y') {
@@ -582,15 +613,16 @@ static void cal_expand(CalEvent *ev, int &n, const RawMaster &m, long lo, long h
             if (occ > hi) break;
             if (rr.count > 0 && made >= rr.count) break;
             if (rr.until > 0 && occ > rr.until) break;
-            if (occ >= lo) { if (!cal_suppressed(m.uid, occ)) cal_add(ev, n, occ, allDay, title, lo, hi); made++; }
+            if (occ >= lo) { if (!cal_suppressed(m.uid, occ)) cal_add(ev, n, occ, CAL_END(occ), allDay, title, loc, lo, hi); made++; }
             y += rr.interval;
         }
     }
+    #undef CAL_END
 }
 
 static void poll_calendar() {
     String url = settings().icsUrl; url.trim();
-    if (!url.length()) { ui_calendar_error("No calendar URL configured"); return; }
+    if (!url.length()) { s_calHadGood = false; ui_calendar_error("No calendar URL configured"); return; }
     if (url.startsWith("webcal://")) url = "https://" + url.substring(9);
 
     long now = time(nullptr);
@@ -602,15 +634,21 @@ static void poll_calendar() {
     https.setTimeout(15000);
     https.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
     https.setUserAgent("Mozilla/5.0");
-    if (!https.begin(client, url)) { ui_calendar_error("Calendar: connect failed"); return; }
+    if (!https.begin(client, url)) {
+        // Transient network hiccup: keep the last-good events on screen (#1).
+        if (s_calHadGood) { Serial.println("[cal] connect failed - keeping last-good events"); return; }
+        ui_calendar_error("Calendar: connect failed"); return;
+    }
     https.addHeader("Accept-Encoding", "identity");   // never gzip — we can't inflate
     const char *hdrKeys[] = {"Content-Encoding", "Content-Type", "Transfer-Encoding"};
     https.collectHeaders(hdrKeys, 3);
     int code = https.GET();
     if (code != HTTP_CODE_OK) {
         Serial.printf("[cal] HTTP %d  %.90s\n", code, url.c_str());
+        https.end();
+        if (s_calHadGood) { Serial.println("[cal] HTTP error - keeping last-good events"); return; }
         char m[40]; snprintf(m, sizeof(m), "Calendar HTTP %d", code);
-        ui_calendar_error(m); https.end(); return;
+        ui_calendar_error(m); return;
     }
     Serial.printf("[cal] CT=%s  CE=%s  TE=%s  len=%d\n",
                   https.header("Content-Type").c_str(),
@@ -710,7 +748,7 @@ static void poll_calendar() {
 
     s_mastN = 0; s_suppN = 0;
     bool inEvent = false, haveStart = false;
-    String summary, dtstart, rrule, uid, recurId, exdate;
+    String summary, dtstart, dtend, duration, location, rrule, uid, recurId, exdate;
 
     String line;
     while (nextLogical(line)) {
@@ -718,7 +756,8 @@ static void poll_calendar() {
         yield();
         if (line.startsWith("BEGIN:VEVENT")) {
             inEvent = true; haveStart = false;
-            summary = ""; dtstart = ""; rrule = ""; uid = ""; recurId = ""; exdate = "";
+            summary = ""; dtstart = ""; dtend = ""; duration = ""; location = "";
+            rrule = ""; uid = ""; recurId = ""; exdate = "";
             vevents++;
             continue;
         }
@@ -726,6 +765,11 @@ static void poll_calendar() {
             if (inEvent && haveStart) {
                 bool allDay = false;
                 long ds = parse_ics_time(dtstart, allDay);
+                long de = 0;
+                if (dtend.length()) { bool ad2; de = parse_ics_time(dtend, ad2); }
+                long durSec = (de > ds && ds > 0) ? de - ds : parse_ics_duration(duration);
+                if (de <= 0 && durSec > 0 && ds > 0) de = ds + durSec;
+                String locU = ics_unescape(location);
                 Rrule rr; parse_rrule(rrule, rr);
                 // EXDATE(s): cancel specific occurrences of this UID.
                 if (exdate.length() && uid.length()) {
@@ -746,15 +790,16 @@ static void poll_calendar() {
                     if (rid > 0 && uid.length() && s_suppN < SUPP_MAX) {
                         s_supp[s_suppN].uid = uid; s_supp[s_suppN].epoch = rid; s_suppN++;
                     }
-                    if (ds > 0) cal_add(cand, nc, ds, allDay, ics_unescape(summary), lo, hi);
+                    if (ds > 0) cal_add(cand, nc, ds, de, allDay, ics_unescape(summary), locU, lo, hi);
                 } else if (rr.has) {
                     if (ds > 0 && ds <= hi && (rr.until == 0 || rr.until >= lo) && s_mastN < MAST_MAX) {
                         s_mast[s_mastN].uid = uid; s_mast[s_mastN].title = ics_unescape(summary);
+                        s_mast[s_mastN].location = locU; s_mast[s_mastN].durationSec = durSec;
                         s_mast[s_mastN].dtstart = ds; s_mast[s_mastN].allDay = allDay;
                         s_mast[s_mastN].rr = rr; s_mastN++;
                     }
                 } else if (ds > 0) {
-                    cal_add(cand, nc, ds, allDay, ics_unescape(summary), lo, hi);
+                    cal_add(cand, nc, ds, de, allDay, ics_unescape(summary), locU, lo, hi);
                 }
             }
             inEvent = false;
@@ -770,6 +815,9 @@ static void poll_calendar() {
         base.toUpperCase();
         if (base == "SUMMARY") summary = value;
         else if (base == "DTSTART") { dtstart = value; haveStart = true; }
+        else if (base == "DTEND") dtend = value;
+        else if (base == "DURATION") duration = value;
+        else if (base == "LOCATION") location = value;
         else if (base == "RRULE") rrule = value;
         else if (base == "UID") uid = value;
         else if (base == "RECURRENCE-ID") recurId = value;
@@ -795,6 +843,7 @@ static void poll_calendar() {
                       (int)cand[i].allDay, cand[i].title.c_str());
     }
     ui_calendar_set(cand, nc);
+    s_calHadGood = true;
 }
 
 // --------------------------------------------------------------------- tick ---
@@ -834,11 +883,6 @@ static void poll_calendar_gate(PagePoll &pp) {
 void data_tick() {
     if (net_state() != NetState::Connected) return;
     if (!s_timeStarted) data_begin_time();
-
-    // PIR motion drives the Air page indicator; update only on change. Cheap.
-    static int s_lastPir = -1;
-    int pir = digitalRead(PIN_GPIO_D);
-    if (pir != s_lastPir) { s_lastPir = pir; ui_air_motion(pir == HIGH); }
 
     // Out-of-band one-off refreshes (radar zoom / ticker timeframe changed).
     // These only fire while their page is visible, so poll now and reset that

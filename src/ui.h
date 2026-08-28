@@ -1,4 +1,4 @@
-// ui.h — LVGL sidebar-nav shell and the eight dashboard pages.
+// ui.h — LVGL sidebar-nav shell and the seven dashboard pages.
 #pragma once
 #include <Arduino.h>
 
@@ -17,7 +17,7 @@ enum Page {
 // Build the whole UI. Call once after display_init().
 void ui_init();
 
-// Periodic UI housekeeping (clock text, config-tab connection details). Cheap.
+// Periodic UI housekeeping (clock, weather animation, live Diag/Calendar values). Cheap.
 void ui_tick();
 
 // Switch the visible page programmatically.
@@ -58,15 +58,14 @@ void ui_tickers_error(const String &msg);
 // Selected chart timeframe index (0=1D .. 4=1Y); read by the data layer.
 int  ui_ticker_tf_index();
 
-#define UI_MAX_EVENTS 12
-struct CalEvent { long start; bool allDay; String title; };
+#define UI_MAX_EVENTS 24
+struct CalEvent { long start; long end; bool allDay; String title; String location; };
 void ui_calendar_set(CalEvent *events, int count);
 void ui_calendar_error(const String &msg);
 
-// ---- Air quality (Open-Meteo US AQI + PIR motion) ----
+// ---- Air quality (Open-Meteo US AQI + UV) ----
 void ui_air_set(int usAqi, float pm25, float pm10, float o3, float no2);
 void ui_air_error(const String &msg);
-void ui_air_motion(bool motion);
 void ui_air_uv_set(float uvIndex);
 
 // ---- Sun / Moon (Open-Meteo daily + local moon-phase math) ----

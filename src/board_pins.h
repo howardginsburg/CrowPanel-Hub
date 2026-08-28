@@ -79,9 +79,8 @@
 // ---------------------------------------------------------------------------
 // Exposed connectors / misc
 // ---------------------------------------------------------------------------
-#define PIN_GPIO_D     38   // Grove digital header -> PIR (screen wake/dim)
-#define PIN_UART0_RX   44   // Grove UART header -> GPS RX (UART0 is shared with the
-                            // serial console: native USB-CDC is unavailable because
-                            // the ESP32-S3 USB pins GPIO19/20 are used by the I2C bus)
+#define PIN_UART0_RX   44   // UART0 serial console (native USB-CDC is unavailable
+                            // because the ESP32-S3 USB pins GPIO19/20 are used by
+                            // the I2C bus)
 #define PIN_UART0_TX   43
 #define PIN_BOOT_BTN   0    // BOOT button: hold ~5s at power-on = Wi-Fi factory reset

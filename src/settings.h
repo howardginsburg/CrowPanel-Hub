@@ -24,7 +24,10 @@ struct Settings {
     // Device
     uint8_t  brightness;       // 0..255
     uint16_t pollSeconds;      // data refresh cadence
-    bool     pirDimEnabled;    // dim the screen when the PIR sees no motion
+
+    // On-device view state (not exposed in the web portal)
+    uint8_t  tickerTf;         // Ticker timeframe index (0=1D .. 4=1Y)
+    uint8_t  calView;          // Calendar view (0=List,1=Day,2=Week,3=Month)
 
     // Web portal PIN gate (empty = disabled)
     String   configPin;
@@ -35,6 +38,10 @@ void settings_load();
 
 // Persist the current settings to NVS.
 void settings_save();
+
+// Persist a single on-device view preference (cheap NVS write, no full save).
+void settings_set_ticker_tf(uint8_t idx);
+void settings_set_cal_view(uint8_t view);
 
 // Access the live settings instance.
 Settings &settings();

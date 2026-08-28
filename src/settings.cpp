@@ -20,8 +20,9 @@ static void apply_defaults() {
     s_cfg.use24hClock  = true;
     s_cfg.brightness   = 200;
     s_cfg.pollSeconds  = 60;
-    s_cfg.pirDimEnabled = true;
-    s_cfg.configPin     = "";
+    s_cfg.tickerTf     = 0;
+    s_cfg.calView      = 0;
+    s_cfg.configPin    = "";
 }
 
 void settings_load() {
@@ -39,7 +40,8 @@ void settings_load() {
     s_cfg.use24hClock  = s_prefs.getBool  ("clk24",    s_cfg.use24hClock);
     s_cfg.brightness   = s_prefs.getUChar ("bright",   s_cfg.brightness);
     s_cfg.pollSeconds  = s_prefs.getUShort("poll",     s_cfg.pollSeconds);
-    s_cfg.pirDimEnabled = s_prefs.getBool ("pirDim",   s_cfg.pirDimEnabled);
+    s_cfg.tickerTf     = s_prefs.getUChar ("tickTf",   s_cfg.tickerTf);
+    s_cfg.calView      = s_prefs.getUChar ("calView",  s_cfg.calView);
     s_cfg.configPin    = s_prefs.getString("pin",      s_cfg.configPin);
     s_prefs.end();
 }
@@ -58,8 +60,25 @@ void settings_save() {
     s_prefs.putBool  ("clk24",    s_cfg.use24hClock);
     s_prefs.putUChar ("bright",   s_cfg.brightness);
     s_prefs.putUShort("poll",     s_cfg.pollSeconds);
-    s_prefs.putBool  ("pirDim",   s_cfg.pirDimEnabled);
+    s_prefs.putUChar ("tickTf",   s_cfg.tickerTf);
+    s_prefs.putUChar ("calView",  s_cfg.calView);
     s_prefs.putString("pin",      s_cfg.configPin);
+    s_prefs.end();
+}
+
+void settings_set_ticker_tf(uint8_t idx) {
+    if (s_cfg.tickerTf == idx) return;
+    s_cfg.tickerTf = idx;
+    s_prefs.begin(NS, false);
+    s_prefs.putUChar("tickTf", idx);
+    s_prefs.end();
+}
+
+void settings_set_cal_view(uint8_t view) {
+    if (s_cfg.calView == view) return;
+    s_cfg.calView = view;
+    s_prefs.begin(NS, false);
+    s_prefs.putUChar("calView", view);
     s_prefs.end();
 }
 
@@ -92,7 +111,6 @@ bool settings_import_json(const String &json) {
     if (doc.containsKey("use24hClock"))  s_cfg.use24hClock  = doc["use24hClock"].as<bool>();
     if (doc.containsKey("brightness"))   s_cfg.brightness   = doc["brightness"].as<uint8_t>();
     if (doc.containsKey("pollSeconds"))  s_cfg.pollSeconds  = doc["pollSeconds"].as<uint16_t>();
-    if (doc.containsKey("pirDimEnabled"))s_cfg.pirDimEnabled= doc["pirDimEnabled"].as<bool>();
     if (doc.containsKey("configPin"))    s_cfg.configPin    = doc["configPin"].as<String>();
 
     // Clamp to safe ranges.
@@ -116,7 +134,6 @@ String settings_export_json() {
     doc["use24hClock"]   = s_cfg.use24hClock;
     doc["brightness"]    = s_cfg.brightness;
     doc["pollSeconds"]   = s_cfg.pollSeconds;
-    doc["pirDimEnabled"] = s_cfg.pirDimEnabled;
     doc["pinSet"]        = s_cfg.configPin.length() > 0;
     String out;
     serializeJson(doc, out);

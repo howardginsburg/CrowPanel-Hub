@@ -13,11 +13,19 @@
 #define LV_COLOR_CHROMA_KEY lv_color_hex(0x00ff00)
 
 /*==================== MEMORY ====================*/
-// LVGL object pool lives in internal RAM; the big draw buffers are allocated
-// separately in PSRAM in display.cpp.
-#define LV_MEM_CUSTOM 0
-#define LV_MEM_SIZE (64U * 1024U)
-#define LV_MEM_ADR 0
+// The LVGL object/draw pool lives in PSRAM (via Arduino's ps_malloc), NOT in
+// internal DRAM. Internal RAM is the scarce resource here: the Wi-Fi/mbedTLS
+// stack needs DMA-capable internal buffers, and the hardware-AES path must
+// allocate one per TLS record. An 80 KB internal LVGL pool starved it, so the
+// large (~400 KB) chunked HTTPS calendar feed was truncated mid-stream
+// ("esp-aes: Failed to allocate memory") and no events landed in-window.
+// Routing LVGL to PSRAM frees ~80 KB internal AND removes the fixed-pool
+// exhaustion that caused the 15-aircraft flights freeze (PSRAM has MBs free).
+#define LV_MEM_CUSTOM 1
+#define LV_MEM_CUSTOM_INCLUDE "Arduino.h"
+#define LV_MEM_CUSTOM_ALLOC   ps_malloc
+#define LV_MEM_CUSTOM_FREE    free
+#define LV_MEM_CUSTOM_REALLOC ps_realloc
 #define LV_MEM_BUF_MAX_NUM 16
 #define LV_MEMCPY_MEMSET_STD 0
 
@@ -38,12 +46,16 @@
 #define LV_USE_LOG 0
 
 /*==================== DRAWING ====================*/
+// Quality knobs: the LVGL heap now lives in PSRAM (LV_MEM_CUSTOM -> ps_malloc),
+// so the small cache/dither buffers below are effectively free. Caches speed up
+// repeated rounded-rect/circle/image draws; smoother gradients (3 stops + error
+// diffusion dithering) remove the banding on the Home sky backdrop and cards.
 #define LV_DRAW_COMPLEX 1
-#define LV_SHADOW_CACHE_SIZE 0
-#define LV_CIRCLE_CACHE_SIZE 4
-#define LV_IMG_CACHE_DEF_SIZE 0
-#define LV_GRADIENT_MAX_STOPS 2
-#define LV_DITHER_GRADIENT 0
+#define LV_SHADOW_CACHE_SIZE 8
+#define LV_CIRCLE_CACHE_SIZE 8
+#define LV_IMG_CACHE_DEF_SIZE 8
+#define LV_GRADIENT_MAX_STOPS 3
+#define LV_DITHER_GRADIENT 1
 #define LV_DISP_ROT_MAX_BUF (10 * 1024)
 
 /*==================== FONTS ====================*/

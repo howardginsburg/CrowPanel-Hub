@@ -4,7 +4,7 @@ A wall/desk information dashboard running on the **Elecrow CrowPanel ESP32 HMI 5
 (module **DIS07050H**): an 800×480 parallel-RGB touchscreen driven by an ESP32-S3, built
 with **PlatformIO + LVGL 8.3**. It shows seven tabs — Home (clock + weather + sun/moon +
 hourly), Flights (live ADS-B radar), Calendar (iCal), Tickers (stock/crypto sparklines),
-Air (US AQI + UV + motion), Diag (device stats), and Config (Wi-Fi setup QR + web portal).
+Air (US AQI + UV), Diag (device stats), and Config (Wi-Fi setup QR + web portal).
 
 This document is the complete technical reference — hardware wiring, the display driver,
 module design, data flow, and build details. The [README](README.md) is the high-level
@@ -37,7 +37,7 @@ overview of the board and what the dashboard does.
 | **Touch** | GT911 capacitive controller over I²C (`0x5D`) |
 | **IO expander** | PCA9557 (`0x18`) — GT911 reset line on v3.0 boards |
 | **Console** | UART0 via onboard CH340. Native USB-CDC is **impossible** (USB pins GPIO19/20 are the I²C bus) |
-| **Sensors/IO** | Grove PIR on GPIO38 (screen wake/dim); BOOT button GPIO0 (Wi-Fi factory reset) |
+| **Buttons** | BOOT button GPIO0 (Wi-Fi factory reset); RST |
 | **Toolchain** | pioarduino fork = Arduino-ESP32 **3.3.11** / ESP-IDF **5.5.5**; LVGL **8.3.11** |
 | **Env** | PlatformIO env `crowpanel-50`; loop task stack raised to 16 KB |
 
@@ -71,14 +71,13 @@ clock **12 MHz**, `pclk_active_neg = 1`.
 
 | Bus / device | Pins |
 |---|---|
-| I²C (GT911 touch, PCA9557, optional ADS1115) | SDA = 19, SCL = 20 |
+| I²C (GT911 touch, PCA9557) | SDA = 19, SCL = 20 |
 | microSD (SPI) | MOSI = 11, MISO = 13, CLK = 12, CS = 10 |
 | I²S audio | LRCLK = 18, BCLK = 42, DIN = 17 |
-| UART0 (console / Grove GPS) | RX = 44, TX = 43 |
-| Digital header (PIR) | GPIO38 |
+| UART0 (serial console) | RX = 44, TX = 43 |
 | BOOT button | GPIO0 |
 
-I²C addresses: GT911 `0x5D` (alt `0x14`), PCA9557 `0x18`, ADS1115 `0x48`.
+I²C addresses: GT911 `0x5D` (alt `0x14`), PCA9557 `0x18`.
 
 ### 2.2 Software stack & build config
 
@@ -100,22 +99,14 @@ PSRAM), `board_build.partitions = huge_app.csv` (3 MB app on 4 MB flash),
 GPIO19/20 are used by the I²C bus, so the serial console must stay on **UART0** via the
 onboard CH340 bridge — USB-CDC can never work on this board), `BOARD_HAS_PSRAM`.
 
-### 2.3 Board revisions & optional sensors
+### 2.3 Board revisions
 
 Board revisions `v1 / v2 / v3`: v3 adds a PCA9557-driven touch-reset init step; v2+
 support auto-download (no manual BOOT press to flash). The firmware performs a best-effort
 PCA9557 reset pulse and works without it if the expander is absent.
 
-Optional Grove modules on the exposed headers:
-
-- **PIR (digital) → GPIO38** — screen wake/dim on motion; also shown on the Air page.
-- **GPS (UART) → UART0 (RX 44 / TX 43)** — UART0 is **shared with the serial console**
-  (native USB-CDC is unavailable on this board), so use it for GPS only when the console
-  isn't attached.
-
-Air quality needs no sensor — the Air page pulls US AQI and pollutant data from the
-keyless Open-Meteo Air Quality API. There is no free native ADC pin (the RGB bus consumes
-the ADC-capable GPIOs), so an analog Grove air sensor is not supported.
+Air-quality and UV data come from the keyless Open-Meteo API, so the Air tab needs no
+on-board sensor.
 
 ---
 
@@ -172,8 +163,7 @@ ever loaded.
 flowchart TD
     A[Serial.begin 115200] --> B[net_check_factory_reset<br/>BOOT held? wipe Wi-Fi creds]
     B --> C[settings_load<br/>read NVS, apply defaults]
-    C --> D[pinMode PIR input]
-    D --> E[touch_init<br/>I2C + GT911]
+    C --> E[touch_init<br/>I2C + GT911]
     E --> F[display_init<br/>esp_lcd panel + LVGL buffers]
     F --> G[display_set_brightness<br/>from settings]
     G --> H[ui_init<br/>build sidebar + all pages]
@@ -305,12 +295,11 @@ static PagePoll s_poll[PAGE_COUNT] = { {poll_weather,0}, {poll_flights,0}, ... }
 `data_tick()` each loop:
 
 1. No-ops unless `net_state() == Connected`.
-2. Updates the PIR motion indicator (cheap, every tick).
-3. Services one-off refresh requests (`s_flightsDirty`, `s_tickersDirty`) from zoom /
+2. Services one-off refresh requests (`s_flightsDirty`, `s_tickersDirty`) from zoom /
    timeframe changes.
-4. Reads `ui_active_page()`. On a **focus change** it sets that page's `lastMs = 0` to
+3. Reads `ui_active_page()`. On a **focus change** it sets that page's `lastMs = 0` to
    force an immediate sync.
-5. Calls the active page's poller if its cadence elapsed. `lastMs` is stamped **after**
+4. Calls the active page's poller if its cadence elapsed. `lastMs` is stamped **after**
    the poll returns, so a slow fetch can't immediately re-trigger itself.
 
 Cadence is `settings().pollSeconds` (default 60 s), except **Flights is capped at 10 s**
@@ -372,7 +361,7 @@ stack to 16 KB and reboots when the portal reports changed Wi-Fi credentials.
 
 ### `board_pins.h` — hardware constants
 All display data/control pins, RGB porch/pulse timing, `LCD_PCLK_HZ` (12 MHz), the shared
-I²C pins, device I²C addresses, SD/I²S pins, and the PIR/BOOT/UART headers. Values are
+I²C pins, device I²C addresses, SD/I²S pins, and the BOOT and UART headers. Values are
 validated against the Elecrow 5.0" reference and are panel-specific (a 7.0" board differs).
 
 ### `display.cpp` / `display.h` — the display driver *(timing-critical)*

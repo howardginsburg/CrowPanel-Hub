@@ -27,7 +27,7 @@ edits, no re-flashing to change settings).
 | **Wireless** | Wi-Fi 2.4 GHz b/g/n + BLE 5.0 |
 | **Display** | 5.0" 800×480 TFT-LCD, 16-bit parallel RGB (RGB565) |
 | **Touch** | GT911 capacitive, I²C |
-| **Extras** | microSD, I²S audio + speaker, PWM backlight, battery input + charging |
+| **Extras** | microSD, I²S audio (speaker connector), PWM backlight, battery input + charging |
 | **Buttons** | BOOT, RST |
 
 > ⚠️ **This is the 5.0" board (DIS07050H), *not* the 7.0" (DIS08070H)** — the two boards
@@ -48,7 +48,7 @@ A left-sidebar, multi-page LVGL dashboard:
 | **Flights** | Live radar of nearby aircraft — tail number, type, altitude, distance | adsb.fi |
 | **Calendar** | Upcoming events | your `.ics` feed |
 | **Tickers** | Stock / crypto prices with sparklines | Yahoo Finance |
-| **Air** | Motion + US air-quality index + UV | PIR + Open-Meteo |
+| **Air** | US air-quality index + UV | Open-Meteo |
 | **Diag** | Uptime, heap/PSRAM, Wi-Fi, reset reason, firmware | on-device |
 | **Config** | Where to configure the device (URL + QR) | — |
 

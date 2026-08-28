@@ -27,6 +27,7 @@ static lv_disp_draw_buf_t s_draw_buf;
 // exact tear-free swap the Elecrow factory driver uses (presentFrameBuffer): draw
 // first, then wait one VSYNC. No semaphores needed.
 static volatile uint32_t s_vsync_count = 0;
+static volatile uint32_t s_frame_count = 0;    // full frames presented (Diag FPS)
 
 static bool IRAM_ATTR on_vsync(esp_lcd_panel_handle_t panel,
                                const esp_lcd_rgb_panel_event_data_t *edata,
@@ -45,6 +46,7 @@ static void flush_cb(lv_disp_drv_t *drv, const lv_area_t *area, lv_color_t *colo
     if (lv_disp_flush_is_last(drv)) {
         uint32_t count = s_vsync_count;
         esp_lcd_panel_draw_bitmap(s_panel, 0, 0, LCD_WIDTH, LCD_HEIGHT, color_p);
+        ++s_frame_count;                                         // for Diag render FPS
         int64_t timeout_at = esp_timer_get_time() + 50 * 1000;   // 50 ms guard
         while (s_vsync_count == count) {
             if (esp_timer_get_time() >= timeout_at) break;
@@ -53,6 +55,8 @@ static void flush_cb(lv_disp_drv_t *drv, const lv_area_t *area, lv_color_t *colo
     }
     lv_disp_flush_ready(drv);
 }
+
+uint32_t display_frame_count() { return s_frame_count; }
 
 static void touch_cb(lv_indev_drv_t *drv, lv_indev_data_t *data) {
     TouchPoint p = touch_read();

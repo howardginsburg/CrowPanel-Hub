@@ -12,3 +12,7 @@ void display_tick();
 
 // Backlight brightness, 0..255. Persisted brightness is applied by the caller.
 void display_set_brightness(uint8_t level);
+
+// Full frames presented to the panel so far (one per LVGL flush). The Diag page
+// samples this to compute an on-device render FPS.
+uint32_t display_frame_count();

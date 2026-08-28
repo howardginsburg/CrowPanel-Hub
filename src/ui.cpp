@@ -29,6 +29,8 @@ static lv_obj_t *s_clockTime;
 static lv_obj_t *s_clockDate;
 static lv_obj_t *s_weatherBody;
 static lv_obj_t *s_wxIcon;
+static int       s_wxCode  = -1;                     // current weather code (for animation)
+static uint32_t  s_wxFrame = 0;                       // weather glyph animation frame
 static lv_obj_t *s_wxTemp;
 static lv_obj_t *s_wxLoc;
 static lv_obj_t *s_fcCard[UI_FORECAST_DAYS];
@@ -46,12 +48,28 @@ static lv_obj_t *s_zoomOut;
 static lv_obj_t *s_radarRangeLbl;
 static lv_obj_t *s_flightCard;
 static lv_obj_t *s_flightCardLbl;
+static lv_obj_t *s_flightHero;                       // nearest-aircraft callout (map view)
+static lv_obj_t *s_heroCallsign;
+static lv_obj_t *s_heroDist;
+static lv_obj_t *s_heroBody;
 static bool      s_flightsShowMap = true;
 static int       s_radarRangeNm = 0;                 // 0 = follow settings
 static FlightRow s_flightRows[UI_MAX_FLIGHTS];
 static int       s_flightCount = 0;
 static lv_coord_t s_planePx[UI_MAX_FLIGHTS];         // radar-local hit targets
 static lv_coord_t s_planePy[UI_MAX_FLIGHTS];
+static float      s_sweepDeg = 0.0f;                 // radar sweep-arm angle (deg)
+static lv_timer_t *s_radarTimer = nullptr;           // animates the sweep
+#define TRAIL_N 12
+struct PlaneTrail {                                  // per-aircraft flown path
+    String   id;
+    float    xnm[TRAIL_N], ynm[TRAIL_N];             // positions NM from home (N-up)
+    uint8_t  len;
+    bool     used;
+    uint32_t lastSeen;
+};
+static PlaneTrail s_trails[UI_MAX_FLIGHTS];
+static uint32_t   s_trailPoll = 0;
 static void      draw_radar();
 static lv_obj_t *s_tickersStatus;
 static lv_obj_t *s_tkList;                           // scroll container for cards
@@ -70,25 +88,78 @@ static lv_obj_t *s_tfBtn[5];                         // timeframe selector butto
 static int       s_tfIndex = 0;                      // 0=1D .. 4=1Y
 static lv_obj_t *s_calList;                          // calendar scroll container
 static lv_obj_t *s_calStatus;
+static lv_obj_t *s_calHero;                          // "up next" hero card
+static lv_obj_t *s_calHeroTag;                       // NOW / UP NEXT pill
+static lv_obj_t *s_calHeroTitle;
+static lv_obj_t *s_calHeroWhen;                      // absolute time + live countdown
 static lv_obj_t *s_calRow[UI_MAX_EVENTS];
 static lv_obj_t *s_calWhen[UI_MAX_EVENTS];
 static lv_obj_t *s_calTitle[UI_MAX_EVENTS];
+
+// Calendar views (List / Day / Week / Month), selectable like the ticker timeframe.
+enum { CAL_LIST = 0, CAL_DAY, CAL_WEEK, CAL_MONTH };
+#define CAL_CACHE_N 96                               // full event cache (decoupled from the row pool)
+static CalEvent  s_calAll[CAL_CACHE_N];              // all fetched events, sorted ascending
+static int       s_calAllCount = 0;
+static int       s_calRowMap[UI_MAX_EVENTS];         // visible row -> cache index
+static int       s_calView   = CAL_LIST;
+static long      s_calAnchor = 0;                    // an instant inside the shown period (0 = today)
+static lv_obj_t *s_calViewBtn[4];                    // List/Day/Week/Month selector
+static lv_obj_t *s_calNav;                           // prev / period / next / today header
+static lv_obj_t *s_calPeriodLbl;                     // current period caption
+static lv_obj_t *s_calGrid;                          // month-grid container
+static lv_obj_t *s_calDow[7];                        // month weekday headers
+static lv_obj_t *s_calCell[42];                      // month day cells
+static lv_obj_t *s_calCellNum[42];                   // day-of-month labels
+static lv_obj_t *s_calCellCnt[42];                   // per-day event count badge
+static long      s_calCellEpoch[42];                 // noon epoch of each month cell
+static lv_obj_t *s_calCard;                          // tap-to-open event detail popup
+static lv_obj_t *s_calCardTitle;
+static lv_obj_t *s_calCardBody;
+static int       s_calHeroIdx = -1;                  // event index shown by the hero
 static lv_obj_t *s_airStatus;                        // air-quality source line
-static lv_obj_t *s_airAqi;                            // big US AQI number
+static lv_obj_t *s_airAqiArc;                         // US AQI ring gauge
+static lv_obj_t *s_airAqi;                            // AQI number (gauge center)
 static lv_obj_t *s_airCat;                            // AQI category text
 static lv_obj_t *s_airPm25;
 static lv_obj_t *s_airPm10;
 static lv_obj_t *s_airO3;
 static lv_obj_t *s_airNo2;
-static lv_obj_t *s_airMotion;                        // PIR status
-static lv_obj_t *s_airUv;                             // UV index value (Air page)
+static lv_obj_t *s_airUvArc;                          // UV ring gauge
+static lv_obj_t *s_airUv;                             // UV number (gauge center)
 static lv_obj_t *s_sunLabel;                          // sunrise/sunset row (Home)
 static lv_obj_t *s_moonLabel;                         // moon phase + illumination (Home)
+static lv_obj_t *s_skyCanvas;                         // day/night sky gradient (Home clock)
+static int       s_srMin = -1, s_ssMin = -1;          // sunrise/sunset (local minutes)
 static lv_obj_t *s_hrCell[UI_HOURLY_N];              // hourly strip cells (Home)
 static lv_obj_t *s_hrHour[UI_HOURLY_N];
 static lv_obj_t *s_hrTemp[UI_HOURLY_N];
 static lv_obj_t *s_hrPrecip[UI_HOURLY_N];
 static lv_obj_t *s_diagLbl;                           // diagnostics multiline body
+static lv_obj_t *s_diagHeapSpark;                     // free-heap trend canvas (Diag)
+static lv_obj_t *s_diagRssiSpark;                     // Wi-Fi RSSI trend canvas (Diag)
+static lv_obj_t *s_diagTempSpark, *s_diagTempVal;     // SoC die-temperature trend (Diag)
+static lv_obj_t *s_diagFpsSpark,  *s_diagFpsVal;      // render-FPS trend (Diag)
+static lv_obj_t *s_diagHeapVal;                       // current heap KB (Diag)
+static lv_obj_t *s_diagRssiVal;                       // current RSSI dBm (Diag)
+static lv_obj_t *s_diagRamBar,   *s_diagRamVal;       // internal-RAM usage bar (Diag)
+static lv_obj_t *s_diagPsramBar, *s_diagPsramVal;     // PSRAM usage bar (Diag)
+static lv_obj_t *s_diagFlashBar, *s_diagFlashVal;     // flash/sketch usage bar (Diag)
+static lv_obj_t *s_diagSigBar[4];                     // Wi-Fi signal strength bars (Diag)
+static lv_obj_t *s_diagSigTxt;                        // signal quality label (Diag)
+#define DIAG_N 120                                    // 120 samples @ 500ms = 60s window
+#define DSP_W  300
+#define DSP_H  64
+static float s_heapHist[DIAG_N];
+static float s_rssiHist[DIAG_N];
+static float s_tempHist[DIAG_N];                      // SoC die temperature (deg F)
+static float s_fpsHist[DIAG_N];                       // measured render FPS
+static int   s_diagCount = 0;
+
+// Offline resilience (#1): once a source has shown good data, a later fetch
+// failure keeps the last-good screen instead of blanking it — only the status
+// line flips to an amber "offline / last update" note.
+static bool s_wxHave = false, s_flightsHave = false, s_airHave = false;
 static lv_obj_t *s_cfgState;
 static lv_obj_t *s_cfgDetails;
 static lv_obj_t *s_cfgQr;
@@ -161,14 +232,16 @@ static WxType wx_type(int code) {
     return WX_STORM;
 }
 
-static void wx_sun(lv_obj_t *cv, int cx, int cy, int r, lv_color_t col) {
+static void wx_sun(lv_obj_t *cv, int cx, int cy, int r, lv_color_t col, int phase) {
     lv_draw_line_dsc_t l; lv_draw_line_dsc_init(&l);
     l.color = col; l.width = 3; l.opa = LV_OPA_COVER; l.round_start = 1; l.round_end = 1;
+    float sway  = sinf(phase * 0.15f) * (6.0f * DEG2RAD);   // rays rock gently
+    int   pulse = (int)lroundf(sinf(phase * 0.30f) * 2.0f); // and breathe in/out
     for (int a = 0; a < 360; a += 45) {
-        float rad = a * DEG2RAD;
+        float rad = a * DEG2RAD + sway;
         lv_point_t p[2] = {
             {(lv_coord_t)(cx + cosf(rad) * (r + 3)), (lv_coord_t)(cy + sinf(rad) * (r + 3))},
-            {(lv_coord_t)(cx + cosf(rad) * (r + 9)), (lv_coord_t)(cy + sinf(rad) * (r + 9))}};
+            {(lv_coord_t)(cx + cosf(rad) * (r + 9 + pulse)), (lv_coord_t)(cy + sinf(rad) * (r + 9 + pulse))}};
         lv_canvas_draw_line(cv, p, 2, &l);
     }
     lv_draw_rect_dsc_t d; lv_draw_rect_dsc_init(&d);
@@ -176,7 +249,8 @@ static void wx_sun(lv_obj_t *cv, int cx, int cy, int r, lv_color_t col) {
     lv_canvas_draw_rect(cv, cx - r, cy - r, 2 * r, 2 * r, &d);
 }
 
-static void wx_cloud(lv_obj_t *cv, int cx, int cy, int s, lv_color_t col) {
+static void wx_cloud(lv_obj_t *cv, int cx, int cy, int s, lv_color_t col, int phase) {
+    cx += (int)lroundf(sinf(phase * 0.12f) * 3.0f);        // slow horizontal drift
     lv_draw_rect_dsc_t c; lv_draw_rect_dsc_init(&c);
     c.bg_color = col; c.bg_opa = LV_OPA_COVER; c.radius = LV_RADIUS_CIRCLE;
     int p = s * 7 / 10;
@@ -188,35 +262,43 @@ static void wx_cloud(lv_obj_t *cv, int cx, int cy, int s, lv_color_t col) {
     lv_canvas_draw_rect(cv, cx - s - p / 2, cy - p / 4, 2 * s + p, p, &b);  // base slab
 }
 
-static void wx_rain(lv_obj_t *cv, int cx, int cy) {
+static void wx_rain(lv_obj_t *cv, int cx, int cy, int phase) {
     lv_draw_line_dsc_t l; lv_draw_line_dsc_init(&l);
     l.color = lv_color_hex(0x5aa0ff); l.width = 2; l.opa = LV_OPA_COVER;
     for (int k = -1; k <= 1; k++) {
-        int x = cx + k * 8;
-        lv_point_t p[2] = {{(lv_coord_t)(x + 3), (lv_coord_t)cy}, {(lv_coord_t)(x - 1), (lv_coord_t)(cy + 8)}};
+        int x   = cx + k * 8;
+        int off = (phase * 3 + (k + 1) * 6) % 16;          // drops fall + recycle
+        int y   = cy - 2 + off;
+        lv_point_t p[2] = {{(lv_coord_t)(x + 3), (lv_coord_t)y}, {(lv_coord_t)(x - 1), (lv_coord_t)(y + 8)}};
         lv_canvas_draw_line(cv, p, 2, &l);
     }
 }
 
-static void wx_snow(lv_obj_t *cv, int cx, int cy) {
+static void wx_snow(lv_obj_t *cv, int cx, int cy, int phase) {
     lv_draw_rect_dsc_t d; lv_draw_rect_dsc_init(&d);
     d.bg_color = lv_color_white(); d.bg_opa = LV_OPA_COVER; d.radius = LV_RADIUS_CIRCLE;
-    for (int k = -1; k <= 1; k++) lv_canvas_draw_rect(cv, cx + k * 8 - 2, cy + 2, 4, 4, &d);
+    for (int k = -1; k <= 1; k++) {
+        int off  = (phase * 2 + (k + 1) * 6) % 16;         // flakes drift down
+        int sway = (int)lroundf(sinf(phase * 0.35f + k) * 2.0f);
+        lv_canvas_draw_rect(cv, cx + k * 8 - 2 + sway, cy - 2 + off, 4, 4, &d);
+    }
 }
 
-static void wx_fog(lv_obj_t *cv, int cx, int cy, int s) {
+static void wx_fog(lv_obj_t *cv, int cx, int cy, int s, int phase) {
     lv_draw_line_dsc_t l; lv_draw_line_dsc_init(&l);
     l.color = lv_color_hex(0x8b97b0); l.width = 3; l.opa = LV_OPA_COVER; l.round_start = 1; l.round_end = 1;
     for (int k = 0; k < 3; k++) {
-        int y = cy + k * 7;
-        lv_point_t p[2] = {{(lv_coord_t)(cx - s), (lv_coord_t)y}, {(lv_coord_t)(cx + s), (lv_coord_t)y}};
+        int y  = cy + k * 7;
+        int dx = (int)lroundf(sinf(phase * 0.15f + k) * 4.0f);   // layers slide
+        lv_point_t p[2] = {{(lv_coord_t)(cx - s + dx), (lv_coord_t)y}, {(lv_coord_t)(cx + s + dx), (lv_coord_t)y}};
         lv_canvas_draw_line(cv, p, 2, &l);
     }
 }
 
-static void wx_bolt(lv_obj_t *cv, int cx, int cy) {
+static void wx_bolt(lv_obj_t *cv, int cx, int cy, int phase) {
     lv_draw_rect_dsc_t d; lv_draw_rect_dsc_init(&d);
     d.bg_color = lv_color_hex(0xffd23f); d.bg_opa = LV_OPA_COVER;
+    if ((phase > 0) && (((phase / 4) % 5) == 0)) d.bg_opa = LV_OPA_40;   // occasional flicker
     lv_point_t z[6] = {
         {(lv_coord_t)(cx + 2), (lv_coord_t)cy},        {(lv_coord_t)(cx - 6), (lv_coord_t)(cy + 9)},
         {(lv_coord_t)(cx - 1), (lv_coord_t)(cy + 9)},  {(lv_coord_t)(cx - 4), (lv_coord_t)(cy + 17)},
@@ -225,43 +307,173 @@ static void wx_bolt(lv_obj_t *cv, int cx, int cy) {
 }
 
 // Draw the icon for a weather code, centered at (cx,cy) with half-size s.
-static void wx_draw(lv_obj_t *cv, int cx, int cy, int s, int code) {
+// phase advances the animation (0 = static, used by the forecast thumbnails).
+static void wx_draw(lv_obj_t *cv, int cx, int cy, int s, int code, int phase = 0) {
     lv_color_t sun     = lv_color_hex(0xffd23f);
     lv_color_t cloud   = lv_color_hex(0xc7d0e0);
     lv_color_t cloudDk = lv_color_hex(0x9aa7bf);
     switch (wx_type(code)) {
-        case WX_CLEAR:  wx_sun(cv, cx, cy, s * 55 / 100, sun); break;
-        case WX_PARTLY: wx_sun(cv, cx - s * 35 / 100, cy - s * 30 / 100, s * 32 / 100, sun);
-                        wx_cloud(cv, cx + s * 12 / 100, cy + s * 22 / 100, s * 42 / 100, cloud); break;
-        case WX_CLOUD:  wx_cloud(cv, cx, cy, s * 52 / 100, cloud); break;
-        case WX_FOG:    wx_cloud(cv, cx, cy - s * 18 / 100, s * 48 / 100, cloud);
-                        wx_fog(cv, cx, cy + s * 42 / 100, s * 55 / 100); break;
+        case WX_CLEAR:  wx_sun(cv, cx, cy, s * 55 / 100, sun, phase); break;
+        case WX_PARTLY: wx_sun(cv, cx - s * 35 / 100, cy - s * 30 / 100, s * 32 / 100, sun, phase);
+                        wx_cloud(cv, cx + s * 12 / 100, cy + s * 22 / 100, s * 42 / 100, cloud, phase); break;
+        case WX_CLOUD:  wx_cloud(cv, cx, cy, s * 52 / 100, cloud, phase); break;
+        case WX_FOG:    wx_cloud(cv, cx, cy - s * 18 / 100, s * 48 / 100, cloud, phase);
+                        wx_fog(cv, cx, cy + s * 42 / 100, s * 55 / 100, phase); break;
         case WX_DRIZZLE:
-        case WX_RAIN:   wx_cloud(cv, cx, cy - s * 22 / 100, s * 48 / 100, cloudDk);
-                        wx_rain(cv, cx, cy + s * 40 / 100); break;
-        case WX_SNOW:   wx_cloud(cv, cx, cy - s * 22 / 100, s * 48 / 100, cloud);
-                        wx_snow(cv, cx, cy + s * 40 / 100); break;
-        case WX_STORM:  wx_cloud(cv, cx, cy - s * 22 / 100, s * 48 / 100, cloudDk);
-                        wx_bolt(cv, cx, cy + s * 30 / 100); break;
+        case WX_RAIN:   wx_cloud(cv, cx, cy - s * 22 / 100, s * 48 / 100, cloudDk, phase);
+                        wx_rain(cv, cx, cy + s * 40 / 100, phase); break;
+        case WX_SNOW:   wx_cloud(cv, cx, cy - s * 22 / 100, s * 48 / 100, cloud, phase);
+                        wx_snow(cv, cx, cy + s * 40 / 100, phase); break;
+        case WX_STORM:  wx_cloud(cv, cx, cy - s * 22 / 100, s * 48 / 100, cloudDk, phase);
+                        wx_bolt(cv, cx, cy + s * 30 / 100, phase); break;
     }
 }
 
 // ---------------------------------------------------------------------------
 // Page builders
 // ---------------------------------------------------------------------------
+
+// Day/night sky gradient behind the Home clock. -----------------------------
+#define SKY_W 340
+#define SKY_H 104
+static uint32_t sky_mix(uint32_t a, uint32_t b, float t) {
+    int ar = (a >> 16) & 0xff, ag = (a >> 8) & 0xff, ab = a & 0xff;
+    int br = (b >> 16) & 0xff, bg = (b >> 8) & 0xff, bb = b & 0xff;
+    int r = ar + (int)lroundf((br - ar) * t);
+    int g = ag + (int)lroundf((bg - ag) * t);
+    int c = ab + (int)lroundf((bb - ab) * t);
+    return ((uint32_t)r << 16) | ((uint32_t)g << 8) | (uint32_t)c;
+}
+static void sky_disc(int cx, int cy, int r, uint32_t col) {
+    lv_draw_rect_dsc_t d; lv_draw_rect_dsc_init(&d);
+    d.bg_color = lv_color_hex(col); d.bg_opa = LV_OPA_COVER; d.radius = LV_RADIUS_CIRCLE;
+    lv_canvas_draw_rect(s_skyCanvas, cx - r, cy - r, 2 * r, 2 * r, &d);
+}
+static void sky_stars() {
+    static const uint16_t SX[] = { 22, 60, 96, 140, 176, 212, 250, 292, 314, 46, 122, 202, 276 };
+    static const uint8_t  SY[] = { 18, 40, 12,  54,  24,  48,  16,  38,  58, 70,  78,  66,  74 };
+    lv_draw_rect_dsc_t s; lv_draw_rect_dsc_init(&s);
+    s.bg_color = lv_color_hex(0xdfe6f5); s.bg_opa = LV_OPA_70; s.radius = LV_RADIUS_CIRCLE;
+    for (unsigned k = 0; k < sizeof(SX) / sizeof(SX[0]); k++)
+        lv_canvas_draw_rect(s_skyCanvas, SX[k], SY[k], 2, 2, &s);
+}
+static int sky_now_min() {
+    time_t now = time(nullptr);
+    if (now < 100000) return -1;
+    struct tm t; localtime_r(&now, &t);
+    return t.tm_hour * 60 + t.tm_min;
+}
+static void draw_sky(int nowMin) {
+    if (!s_skyCanvas) return;
+    const int TW = 45;                                 // twilight half-window (min)
+    const uint32_t N_TOP = 0x070b1c, N_BOT = 0x131b2e; // night
+    const uint32_t W_TOP = 0x243a6e, W_BOT = 0xef9f57; // dawn
+    const uint32_t D_TOP = 0x1e5fbf, D_BOT = 0x88baee; // day
+    const uint32_t K_TOP = 0x2a2450, K_BOT = 0xe8794a; // dusk
+    uint32_t aT = N_TOP, aB = N_BOT, bT = N_TOP, bB = N_BOT; float t = 0;
+    int sr = s_srMin, ss = s_ssMin;
+    if (sr >= 0 && ss >= 0 && ss > sr) {
+        if      (nowMin < sr - TW || nowMin > ss + TW) { }                                   // night
+        else if (nowMin < sr)      { aT=N_TOP;aB=N_BOT; bT=W_TOP;bB=W_BOT; t=(float)(nowMin-(sr-TW))/TW; }
+        else if (nowMin < sr + TW) { aT=W_TOP;aB=W_BOT; bT=D_TOP;bB=D_BOT; t=(float)(nowMin-sr)/TW; }
+        else if (nowMin <= ss - TW){ aT=D_TOP;aB=D_BOT; bT=D_TOP;bB=D_BOT; t=0; }             // day
+        else if (nowMin < ss)      { aT=D_TOP;aB=D_BOT; bT=K_TOP;bB=K_BOT; t=(float)(nowMin-(ss-TW))/TW; }
+        else                       { aT=K_TOP;aB=K_BOT; bT=N_TOP;bB=N_BOT; t=(float)(nowMin-ss)/TW; }
+    }
+    if (t < 0) t = 0; if (t > 1) t = 1;
+    uint32_t topC = sky_mix(aT, bT, t), botC = sky_mix(aB, bB, t);
+
+    // Weather-aware backdrop (#5): during day/twilight, blend the clear-sky
+    // gradient toward an overcast palette matching the current condition. Purely
+    // procedural (zero flash) and colour-only, so there is no layout risk. Deep
+    // night and "no sun data" keep the clear/starfield look untouched.
+    float cloudK = 0;
+    if (s_wxCode >= 0 && sr >= 0 && ss >= 0) {
+        uint32_t oT = 0, oB = 0;
+        switch (wx_type(s_wxCode)) {
+            case WX_CLEAR:                            break;   // leave the blue sky
+            case WX_PARTLY:  oT=0x6f80a0; oB=0xaebccf; cloudK=0.26f; break;
+            case WX_CLOUD:   oT=0x5f6b80; oB=0x97a4ba; cloudK=0.55f; break;
+            case WX_FOG:     oT=0x8a94a4; oB=0xc2cad6; cloudK=0.60f; break;
+            case WX_DRIZZLE: oT=0x566072; oB=0x8793a6; cloudK=0.55f; break;
+            case WX_RAIN:    oT=0x49525f; oB=0x74808f; cloudK=0.62f; break;
+            case WX_SNOW:    oT=0x8f99a8; oB=0xcdd6e2; cloudK=0.50f; break;
+            case WX_STORM:   oT=0x333a47; oB=0x59616f; cloudK=0.72f; break;
+        }
+        // Fade the tint in across twilight so day<->night stays smooth, and drop
+        // it entirely at deep night (base is already dark; graying it looks wrong).
+        float day = 1.0f;
+        if      (nowMin < sr) day = (float)(nowMin - (sr - TW)) / TW;
+        else if (nowMin > ss) day = (float)((ss + TW) - nowMin) / TW;
+        if (day < 0) day = 0; if (day > 1) day = 1;
+        cloudK *= day;
+        if (cloudK > 0) {
+            topC = sky_mix(topC, oT, cloudK);
+            botC = sky_mix(botC, oB, cloudK);
+        }
+    }
+
+    lv_draw_line_dsc_t g; lv_draw_line_dsc_init(&g); g.width = 1;
+    for (int y = 0; y < SKY_H; y++) {
+        g.color = lv_color_hex(sky_mix(topC, botC, (float)y / (SKY_H - 1)));
+        lv_point_t p[2] = {{0, (lv_coord_t)y}, {(lv_coord_t)(SKY_W - 1), (lv_coord_t)y}};
+        lv_canvas_draw_line(s_skyCanvas, p, 2, &g);
+    }
+
+    // Sun/moon travel an arc during the day; keep them right of the clock so the
+    // numbers stay clear (ax0..ax1 is the open band between clock and weather panel).
+    const int ax0 = 196, ax1 = SKY_W - 22, baseY = SKY_H - 14, arcH = SKY_H - 42;
+    if (sr >= 0 && ss >= 0 && nowMin >= sr && nowMin <= ss && ss > sr) {
+        float fr = (float)(nowMin - sr) / (ss - sr);
+        int dx = ax0 + (int)lroundf(fr * (ax1 - ax0));
+        int dy = baseY - (int)lroundf(sinf(fr * 3.14159265f) * arcH);
+        sky_disc(dx, dy, 13, sky_mix(0xffe08a, 0x9aa3b2, cloudK));   // sun (dimmed if overcast)
+    } else if (sr >= 0 && ss >= 0) {
+        float fr = (nowMin > ss) ? (float)(nowMin - ss) / ((sr + 1440) - ss)
+                                 : (float)(nowMin + 1440 - ss) / ((sr + 1440) - ss);
+        int dx = ax0 + (int)lroundf(fr * (ax1 - ax0));
+        int dy = baseY - (int)lroundf(sinf(fr * 3.14159265f) * arcH * 0.8f);
+        sky_stars();
+        sky_disc(dx, dy, 11, 0xdfe6f0);                // moon
+    } else {
+        sky_stars();
+    }
+}
+
 static void build_home(lv_obj_t *pg) {
-    // Clock + date (top-left).
+    // Day/night sky gradient sits behind the clock (created first = drawn under).
+    static lv_color_t *skyBuf = nullptr;
+    if (!skyBuf) skyBuf = (lv_color_t *)heap_caps_malloc(
+        SKY_W * SKY_H * sizeof(lv_color_t), MALLOC_CAP_SPIRAM);
+    s_skyCanvas = lv_canvas_create(pg);
+    lv_canvas_set_buffer(s_skyCanvas, skyBuf, SKY_W, SKY_H, LV_IMG_CF_TRUE_COLOR);
+    lv_obj_align(s_skyCanvas, LV_ALIGN_TOP_LEFT, 0, 0);
+    lv_obj_set_style_radius(s_skyCanvas, 10, 0);
+    lv_obj_set_style_clip_corner(s_skyCanvas, true, 0);
+    draw_sky(sky_now_min());
+
+    // Clock + date (top-left). Translucent plates keep text legible over a bright sky/sun.
     s_clockTime = lv_label_create(pg);
     lv_label_set_text(s_clockTime, "--:--");
     lv_obj_set_style_text_font(s_clockTime, &lv_font_montserrat_48, 0);
     lv_obj_set_style_text_color(s_clockTime, lv_color_hex(0xffffff), 0);
-    lv_obj_align(s_clockTime, LV_ALIGN_TOP_LEFT, 0, 6);
+    lv_obj_set_style_bg_color(s_clockTime, lv_color_hex(0x0a0e18), 0);
+    lv_obj_set_style_bg_opa(s_clockTime, LV_OPA_60, 0);
+    lv_obj_set_style_pad_hor(s_clockTime, 10, 0);
+    lv_obj_set_style_pad_ver(s_clockTime, 2, 0);
+    lv_obj_set_style_radius(s_clockTime, 10, 0);
+    lv_obj_align(s_clockTime, LV_ALIGN_TOP_LEFT, 0, 4);
 
     s_clockDate = lv_label_create(pg);
     lv_label_set_text(s_clockDate, "Waiting for time sync...");
     lv_obj_set_style_text_font(s_clockDate, &lv_font_montserrat_20, 0);
-    lv_obj_set_style_text_color(s_clockDate, lv_color_hex(0x8b97b0), 0);
-    lv_obj_align(s_clockDate, LV_ALIGN_TOP_LEFT, 2, 66);
+    lv_obj_set_style_text_color(s_clockDate, lv_color_hex(0xeaf0ff), 0);
+    lv_obj_set_style_bg_color(s_clockDate, lv_color_hex(0x0a0e18), 0);
+    lv_obj_set_style_bg_opa(s_clockDate, LV_OPA_50, 0);
+    lv_obj_set_style_pad_hor(s_clockDate, 8, 0);
+    lv_obj_set_style_pad_ver(s_clockDate, 2, 0);
+    lv_obj_set_style_radius(s_clockDate, 8, 0);
+    lv_obj_align(s_clockDate, LV_ALIGN_TOP_LEFT, 0, 62);
 
     // Current conditions (top-right): drawn icon + big temperature + details.
     static lv_color_t *wxBuf = nullptr;
@@ -393,6 +605,44 @@ static void update_radar_range_lbl() {
     lv_label_set_text(s_radarRangeLbl, b);
 }
 
+static const char *compass8(int deg) {
+    static const char *C[8] = {"N", "NE", "E", "SE", "S", "SW", "W", "NW"};
+    int d = ((deg % 360) + 360) % 360;
+    return C[((d + 22) / 45) % 8];
+}
+
+// Populate the nearest-aircraft callout (closest by distance); hidden in table view / no traffic.
+static void update_flight_hero() {
+    if (!s_flightHero) return;
+    if (!s_flightsShowMap || s_flightCount <= 0) {
+        lv_obj_add_flag(s_flightHero, LV_OBJ_FLAG_HIDDEN);
+        return;
+    }
+    int best = 0;
+    for (int i = 1; i < s_flightCount; i++)
+        if (s_flightRows[i].distNm < s_flightRows[best].distNm) best = i;
+    const FlightRow &f = s_flightRows[best];
+
+    const char *id = f.tail.length() ? f.tail.c_str()
+                   : (f.callsign.length() ? f.callsign.c_str() : "(unknown)");
+    lv_label_set_text(s_heroCallsign, id);
+    char d[16]; snprintf(d, sizeof(d), "%d NM", f.distNm);
+    lv_label_set_text(s_heroDist, d);
+
+    char alt[16];
+    if (f.altFt >= 18000) snprintf(alt, sizeof(alt), "FL%03d", f.altFt / 100);
+    else                  snprintf(alt, sizeof(alt), "%d ft", f.altFt);
+    char spd[12];
+    if (f.gs >= 0) snprintf(spd, sizeof(spd), "%d kt", f.gs);
+    else           snprintf(spd, sizeof(spd), "-- kt");
+    char body[80];
+    snprintf(body, sizeof(body), "%s %03d\n%s\n%s\n%s",
+             compass8(f.bearing), f.bearing,
+             f.type.length() ? f.type.c_str() : "--", alt, spd);
+    lv_label_set_text(s_heroBody, body);
+    lv_obj_clear_flag(s_flightHero, LV_OBJ_FLAG_HIDDEN);
+}
+
 static void flights_toggle_cb(lv_event_t *e) {
     s_flightsShowMap = !s_flightsShowMap;
     if (s_flightsShowMap) {
@@ -402,6 +652,7 @@ static void flights_toggle_cb(lv_event_t *e) {
         if (s_zoomOut) lv_obj_clear_flag(s_zoomOut, LV_OBJ_FLAG_HIDDEN);
         if (s_radarRangeLbl) lv_obj_clear_flag(s_radarRangeLbl, LV_OBJ_FLAG_HIDDEN);
         lv_label_set_text(s_flightsToggleLbl, LV_SYMBOL_LIST " Table");
+        update_flight_hero();
     } else {
         lv_obj_add_flag(s_flightsRadar, LV_OBJ_FLAG_HIDDEN);
         lv_obj_clear_flag(s_flightsTable, LV_OBJ_FLAG_HIDDEN);
@@ -409,6 +660,7 @@ static void flights_toggle_cb(lv_event_t *e) {
         if (s_zoomOut) lv_obj_add_flag(s_zoomOut, LV_OBJ_FLAG_HIDDEN);
         if (s_radarRangeLbl) lv_obj_add_flag(s_radarRangeLbl, LV_OBJ_FLAG_HIDDEN);
         if (s_flightCard) lv_obj_add_flag(s_flightCard, LV_OBJ_FLAG_HIDDEN);
+        if (s_flightHero) lv_obj_add_flag(s_flightHero, LV_OBJ_FLAG_HIDDEN);
         lv_label_set_text(s_flightsToggleLbl, LV_SYMBOL_UP " Map");
     }
 }
@@ -465,6 +717,15 @@ static void radar_zoom(int dir) {
 }
 static void zoom_in_cb(lv_event_t *e)  { radar_zoom(-1); }   // + = tighter range
 static void zoom_out_cb(lv_event_t *e) { radar_zoom(+1); }
+
+// Advances the radar sweep only while the Flights map view is on screen.
+static void radar_sweep_timer_cb(lv_timer_t *t) {
+    if (ui_active_page() != PAGE_FLIGHTS || !s_flightsShowMap) return;
+    if (!s_flightsRadar || lv_obj_has_flag(s_flightsRadar, LV_OBJ_FLAG_HIDDEN)) return;
+    s_sweepDeg += 6.0f;
+    if (s_sweepDeg >= 360.0f) s_sweepDeg -= 360.0f;
+    draw_radar();
+}
 
 static void build_flights(lv_obj_t *pg) {
     s_flightsStatus = lv_label_create(pg);
@@ -544,6 +805,46 @@ static void build_flights(lv_obj_t *pg) {
     lv_obj_center(xLbl);
     lv_obj_add_flag(s_flightCard, LV_OBJ_FLAG_HIDDEN);
 
+    // Nearest-aircraft callout (left gutter, shown only in map view).
+    s_flightHero = lv_obj_create(pg);
+    lv_obj_set_size(s_flightHero, 104, 150);
+    lv_obj_align(s_flightHero, LV_ALIGN_TOP_LEFT, 0, 44);
+    lv_obj_set_style_bg_color(s_flightHero, lv_color_hex(0x141c2e), 0);
+    lv_obj_set_style_border_color(s_flightHero, lv_color_hex(0x2f7bff), 0);
+    lv_obj_set_style_border_width(s_flightHero, 1, 0);
+    lv_obj_set_style_radius(s_flightHero, 8, 0);
+    lv_obj_set_style_pad_all(s_flightHero, 8, 0);
+    lv_obj_clear_flag(s_flightHero, LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_obj_t *htag = lv_label_create(s_flightHero);
+    lv_label_set_text(htag, "NEAREST");
+    lv_obj_set_style_text_font(htag, &lv_font_montserrat_12, 0);
+    lv_obj_set_style_text_color(htag, lv_color_hex(0x7fd1ff), 0);
+    lv_obj_align(htag, LV_ALIGN_TOP_LEFT, 0, 0);
+
+    s_heroCallsign = lv_label_create(s_flightHero);
+    lv_label_set_text(s_heroCallsign, "--");
+    lv_obj_set_style_text_font(s_heroCallsign, &lv_font_montserrat_16, 0);
+    lv_obj_set_style_text_color(s_heroCallsign, lv_color_hex(0xe6ebf5), 0);
+    lv_obj_align(s_heroCallsign, LV_ALIGN_TOP_LEFT, 0, 18);
+
+    s_heroDist = lv_label_create(s_flightHero);
+    lv_label_set_text(s_heroDist, "--");
+    lv_obj_set_style_text_font(s_heroDist, &lv_font_montserrat_16, 0);
+    lv_obj_set_style_text_color(s_heroDist, lv_color_hex(0x39d98a), 0);
+    lv_obj_align(s_heroDist, LV_ALIGN_TOP_LEFT, 0, 42);
+
+    s_heroBody = lv_label_create(s_flightHero);
+    lv_label_set_text(s_heroBody, "");
+    lv_obj_set_style_text_font(s_heroBody, &lv_font_montserrat_12, 0);
+    lv_obj_set_style_text_color(s_heroBody, lv_color_hex(0xcdd6ea), 0);
+    lv_obj_set_style_text_line_space(s_heroBody, 4, 0);
+    lv_obj_set_width(s_heroBody, 88);
+    lv_label_set_long_mode(s_heroBody, LV_LABEL_LONG_WRAP);
+    lv_obj_align(s_heroBody, LV_ALIGN_TOP_LEFT, 0, 68);
+
+    lv_obj_add_flag(s_flightHero, LV_OBJ_FLAG_HIDDEN);
+
     // Table (hidden until toggled).
     s_flightsTable = lv_table_create(pg);
     lv_obj_align(s_flightsTable, LV_ALIGN_TOP_LEFT, 0, 32);
@@ -566,6 +867,8 @@ static void build_flights(lv_obj_t *pg) {
     lv_obj_add_flag(s_flightsTable, LV_OBJ_FLAG_HIDDEN);   // map is the default view
     update_radar_range_lbl();
     draw_radar();
+
+    if (!s_radarTimer) s_radarTimer = lv_timer_create(radar_sweep_timer_cb, 70, nullptr);
 }
 
 // ------------------------------------------------------------ tickers page ---
@@ -591,6 +894,7 @@ static void tf_click_cb(lv_event_t *e) {
     int idx = (int)(intptr_t)lv_event_get_user_data(e);
     if (idx == s_tfIndex) return;
     s_tfIndex = idx;
+    settings_set_ticker_tf((uint8_t)idx);   // remember across reboots
     tf_restyle();
     data_request_tickers();          // refetch this timeframe on the next tick
 }
@@ -613,6 +917,21 @@ static void draw_sparkline(int i, TickerRow &r) {
         pts[j].y = (lv_coord_t)y;
     }
     bool up = r.changeAbs >= 0;
+
+    // Translucent area fill under the curve (per-column so concave shapes fill right).
+    lv_draw_rect_dsc_t fill; lv_draw_rect_dsc_init(&fill);
+    fill.bg_color = lv_color_hex(up ? 0x39d98a : 0xff5c5c);
+    fill.bg_opa   = LV_OPA_20;
+    const int baseY = SP_H - 1;
+    for (int s = 0; s < len - 1; s++) {
+        int xa = pts[s].x, ya = pts[s].y, xb = pts[s + 1].x, yb = pts[s + 1].y;
+        if (xb <= xa) continue;
+        for (int x = (s == 0 ? xa : xa + 1); x <= xb; x++) {
+            int y = ya + (yb - ya) * (x - xa) / (xb - xa);
+            if (y < baseY) lv_canvas_draw_rect(cv, x, y, 1, baseY - y + 1, &fill);
+        }
+    }
+
     lv_draw_line_dsc_t dsc;
     lv_draw_line_dsc_init(&dsc);
     dsc.color = lv_color_hex(up ? 0x39d98a : 0xff5c5c);
@@ -648,6 +967,8 @@ static void build_tickers(lv_obj_t *pg) {
         lv_obj_center(l);
         s_tfBtn[i] = b;
     }
+    s_tfIndex = settings().tickerTf;
+    if (s_tfIndex < 0 || s_tfIndex > 4) s_tfIndex = 0;
     tf_restyle();
 
     // Scrollable card list.
@@ -821,8 +1142,296 @@ static void build_sidebar(lv_obj_t *scr) {
 // ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
+// Format a duration in seconds to a compact human string ("30 min", "1h 15m").
+static void cal_fmt_dur(long sec, char *out, size_t n) {
+    if (sec <= 0) { out[0] = 0; return; }
+    long m = sec / 60;
+    if      (m < 60)      snprintf(out, n, "%ld min", m);
+    else if (m % 60 == 0) snprintf(out, n, "%ldh", m / 60);
+    else if (m < 1440)    snprintf(out, n, "%ldh %ldm", m / 60, m % 60);
+    else                  snprintf(out, n, "%ld day%s", m / 1440, m / 1440 == 1 ? "" : "s");
+}
+
+static void cal_close_cb(lv_event_t *e) {
+    if (s_calCard) lv_obj_add_flag(s_calCard, LV_OBJ_FLAG_HIDDEN);
+}
+
+// Populate and open the detail popup for cached event index `idx`.
+static void cal_show_detail(int idx) {
+    if (!s_calCard || idx < 0 || idx >= s_calAllCount) return;
+    const CalEvent &e = s_calAll[idx];
+    lv_label_set_text(s_calCardTitle, e.title.length() ? e.title.c_str() : "(no title)");
+
+    time_t st = (time_t)e.start; struct tm t; localtime_r(&st, &t);
+    time_t now = time(nullptr);
+    bool h24 = settings().use24hClock;
+
+    char body[256]; int p = 0;
+    char dbuf[48]; strftime(dbuf, sizeof(dbuf), "%A, %B %d", &t);
+    p += snprintf(body + p, sizeof(body) - p, "%s\n", dbuf);
+
+    if (e.allDay) {
+        p += snprintf(body + p, sizeof(body) - p, "All day\n");
+    } else {
+        struct tm s1; localtime_r(&st, &s1);
+        char t1[14];
+        if (h24) snprintf(t1, sizeof(t1), "%02d:%02d", s1.tm_hour, s1.tm_min);
+        else { int h = s1.tm_hour % 12; if (!h) h = 12;
+               snprintf(t1, sizeof(t1), "%d:%02d %s", h, s1.tm_min, s1.tm_hour < 12 ? "AM" : "PM"); }
+        if (e.end > e.start) {
+            time_t et = (time_t)e.end; struct tm s2; localtime_r(&et, &s2);
+            char t2[14];
+            if (h24) snprintf(t2, sizeof(t2), "%02d:%02d", s2.tm_hour, s2.tm_min);
+            else { int h = s2.tm_hour % 12; if (!h) h = 12;
+                   snprintf(t2, sizeof(t2), "%d:%02d %s", h, s2.tm_min, s2.tm_hour < 12 ? "AM" : "PM"); }
+            char dur[20]; cal_fmt_dur((long)e.end - (long)e.start, dur, sizeof(dur));
+            p += snprintf(body + p, sizeof(body) - p, "%s - %s  (%s)\n", t1, t2, dur);
+        } else {
+            p += snprintf(body + p, sizeof(body) - p, "%s\n", t1);
+        }
+    }
+
+    if (now > 100000) {
+        long diff = (long)e.start - (long)now;
+        char rel[48];
+        if (!e.allDay && e.end > 0 && now >= e.start && now < e.end) {
+            long left = (long)e.end - (long)now;
+            if (left < 3600) snprintf(rel, sizeof(rel), "In progress - ends in %ld min", left / 60);
+            else snprintf(rel, sizeof(rel), "In progress - ends in %ldh %02ldm", left / 3600, (left % 3600) / 60);
+        } else if (diff <= 60 && diff > -60) snprintf(rel, sizeof(rel), "Starting now");
+        else if (diff < 0) {
+            long ago = -diff;
+            if      (ago < 3600)  snprintf(rel, sizeof(rel), "Started %ld min ago", ago / 60);
+            else if (ago < 86400) snprintf(rel, sizeof(rel), "Started %ldh ago", ago / 3600);
+            else                  snprintf(rel, sizeof(rel), "%ld days ago", ago / 86400);
+        } else if (diff < 3600)  snprintf(rel, sizeof(rel), "Starts in %ld min", diff / 60);
+        else if (diff < 86400)   snprintf(rel, sizeof(rel), "Starts in %ldh %02ldm", diff / 3600, (diff % 3600) / 60);
+        else                     snprintf(rel, sizeof(rel), "Starts in %ld days", diff / 86400);
+        p += snprintf(body + p, sizeof(body) - p, "%s\n", rel);
+    }
+
+    if (e.location.length())
+        snprintf(body + p, sizeof(body) - p, LV_SYMBOL_GPS " %s", e.location.c_str());
+
+    lv_label_set_text(s_calCardBody, body);
+    lv_obj_clear_flag(s_calCard, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_move_foreground(s_calCard);
+}
+
+static void cal_row_cb(lv_event_t *e) {
+    int i = (int)(intptr_t)lv_event_get_user_data(e);
+    if (i >= 0 && i < UI_MAX_EVENTS) cal_show_detail(s_calRowMap[i]);
+}
+
+static void cal_hero_cb(lv_event_t *e) { cal_show_detail(s_calHeroIdx); }
+
+// ---------------------------------------------------------------------------
+// Calendar view engine (List / Day / Week / Month + period navigation)
+// ---------------------------------------------------------------------------
+static void update_cal_hero();                       // hero repaint shares the render path
+static const char *CAL_VIEW_LABELS[4] = {"List", "Day", "Week", "Month"};
+
+static void cal_view_restyle() {
+    for (int i = 0; i < 4; i++) {
+        if (!s_calViewBtn[i]) continue;
+        bool on = (i == s_calView);
+        lv_obj_set_style_bg_color(s_calViewBtn[i], lv_color_hex(on ? 0x2d6cdf : 0x1c2740), 0);
+    }
+}
+
+// Fill one visible list row from a cached event (weekday + date + time, plus title).
+static void cal_fill_row(int r, const CalEvent &e) {
+    static const char *WD[7] = {"Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"};
+    bool h24 = settings().use24hClock;
+    time_t t = (time_t)e.start; struct tm tm; localtime_r(&t, &tm);
+    int wd = tm.tm_wday; if (wd < 0 || wd > 6) wd = 0;
+    char when[40];
+    if (e.allDay)
+        snprintf(when, sizeof(when), "%s %d/%d\nAll day", WD[wd], tm.tm_mon + 1, tm.tm_mday);
+    else if (h24)
+        snprintf(when, sizeof(when), "%s %d/%d\n%02d:%02d", WD[wd], tm.tm_mon + 1, tm.tm_mday, tm.tm_hour, tm.tm_min);
+    else { int h12 = tm.tm_hour % 12; if (!h12) h12 = 12;
+        snprintf(when, sizeof(when), "%s %d/%d\n%d:%02d %s", WD[wd], tm.tm_mon + 1, tm.tm_mday,
+                 h12, tm.tm_min, tm.tm_hour < 12 ? "AM" : "PM"); }
+    lv_label_set_text(s_calWhen[r], when);
+    lv_label_set_text(s_calTitle[r], e.title.length() ? e.title.c_str() : "(no title)");
+    lv_obj_clear_flag(s_calRow[r], LV_OBJ_FLAG_HIDDEN);
+}
+
+// Advance an instant by whole months, staying mid-month/noon to dodge DST + rollover.
+static long cal_add_months(long t, int delta) {
+    time_t tt = (time_t)t; struct tm tm; localtime_r(&tt, &tm);
+    tm.tm_mon += delta; tm.tm_mday = 15; tm.tm_hour = 12; tm.tm_min = tm.tm_sec = 0;
+    return (long)mktime(&tm);
+}
+
+// Compute the [lo,hi) epoch window and a header caption for the current view/anchor.
+static void cal_period(long &lo, long &hi, char *label, size_t ln) {
+    static const char *MON[12] = {"Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                                  "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"};
+    static const char *WD[7]   = {"Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"};
+    time_t base = (s_calAnchor > 100000) ? (time_t)s_calAnchor : time(nullptr);
+    struct tm tm; localtime_r(&base, &tm);
+    if (s_calView == CAL_DAY) {
+        struct tm d = tm; d.tm_hour = d.tm_min = d.tm_sec = 0;
+        lo = (long)mktime(&d); hi = lo + 86400L;
+        snprintf(label, ln, "%s, %s %d", WD[d.tm_wday], MON[d.tm_mon], d.tm_mday);
+    } else if (s_calView == CAL_WEEK) {
+        struct tm d = tm; d.tm_hour = d.tm_min = d.tm_sec = 0;
+        long day0 = (long)mktime(&d);
+        lo = day0 - d.tm_wday * 86400L; hi = lo + 7 * 86400L;
+        time_t a = (time_t)lo, b = (time_t)(hi - 86400L);
+        struct tm ta, tb; localtime_r(&a, &ta); localtime_r(&b, &tb);
+        snprintf(label, ln, "%s %d - %s %d", MON[ta.tm_mon], ta.tm_mday, MON[tb.tm_mon], tb.tm_mday);
+    } else {   // month window (also used to caption Month view)
+        struct tm f = tm; f.tm_mday = 1; f.tm_hour = f.tm_min = f.tm_sec = 0;
+        lo = (long)mktime(&f);
+        struct tm nx = f; nx.tm_mon += 1; hi = (long)mktime(&nx);
+        snprintf(label, ln, "%s %d", MON[f.tm_mon], f.tm_year + 1900);
+    }
+}
+
+// Paint the 42-cell month grid: day numbers, in/out-of-month shading, today accent,
+// and a per-day event count. Also records each cell's noon epoch for tap-to-Day.
+static void cal_render_month() {
+    time_t base = (s_calAnchor > 100000) ? (time_t)s_calAnchor : time(nullptr);
+    struct tm fm; localtime_r(&base, &fm);
+    fm.tm_mday = 1; fm.tm_hour = 12; fm.tm_min = fm.tm_sec = 0;
+    mktime(&fm);                                     // normalize -> tm_wday of the 1st
+    int firstWd = fm.tm_wday, thisMon = fm.tm_mon;
+
+    time_t now = time(nullptr); struct tm nm; localtime_r(&now, &nm);
+    auto serial = [](const struct tm &t) { return (t.tm_year + 1900) * 400 + t.tm_mon * 31 + t.tm_mday; };
+    int todaySerial = serial(nm);
+
+    int cellSerial[42];
+    for (int i = 0; i < 42; i++) {
+        struct tm c = fm; c.tm_mday = 1 - firstWd + i; c.tm_hour = 12; c.tm_min = c.tm_sec = 0;
+        time_t ct = mktime(&c);                       // normalizes across month bounds
+        s_calCellEpoch[i] = (long)ct;
+        cellSerial[i] = serial(c);
+        bool inMonth = (c.tm_mon == thisMon);
+        bool today   = (cellSerial[i] == todaySerial);
+        char dn[6]; snprintf(dn, sizeof(dn), "%d", c.tm_mday);
+        lv_label_set_text(s_calCellNum[i], dn);
+        lv_obj_set_style_text_color(s_calCellNum[i], lv_color_hex(inMonth ? 0xe6ebf5 : 0x54607a), 0);
+        lv_obj_set_style_bg_color(s_calCell[i],
+            lv_color_hex(today ? 0x1f3358 : (inMonth ? 0x141c2e : 0x0f1524)), 0);
+        lv_obj_set_style_border_width(s_calCell[i], today ? 2 : 0, 0);
+    }
+
+    int cnt[42]; for (int i = 0; i < 42; i++) cnt[i] = 0;
+    for (int i = 0; i < s_calAllCount; i++) {
+        time_t et = (time_t)s_calAll[i].start; struct tm em; localtime_r(&et, &em);
+        int es = serial(em);
+        for (int k = 0; k < 42; k++) if (cellSerial[k] == es) { cnt[k]++; break; }
+    }
+    for (int k = 0; k < 42; k++) {
+        if (cnt[k] > 0) { char b[8]; snprintf(b, sizeof(b), "%d", cnt[k]);
+                          lv_label_set_text(s_calCellCnt[k], b); }
+        else            lv_label_set_text(s_calCellCnt[k], "");
+    }
+}
+
+// Filter the cache into the row pool (List/Day/Week) or the grid (Month), and update
+// the header (status caption for List, period navigator for the dated views).
+static void cal_render() {
+    if (!s_calList) return;
+    cal_view_restyle();
+
+    bool isList  = (s_calView == CAL_LIST);
+    bool isMonth = (s_calView == CAL_MONTH);
+
+    if (s_calStatus) { if (isList) lv_obj_clear_flag(s_calStatus, LV_OBJ_FLAG_HIDDEN);
+                       else        lv_obj_add_flag(s_calStatus, LV_OBJ_FLAG_HIDDEN); }
+    if (s_calNav)    { if (isList) lv_obj_add_flag(s_calNav, LV_OBJ_FLAG_HIDDEN);
+                       else        lv_obj_clear_flag(s_calNav, LV_OBJ_FLAG_HIDDEN); }
+    for (int i = 0; i < 7; i++) if (s_calDow[i]) {
+        if (isMonth) lv_obj_clear_flag(s_calDow[i], LV_OBJ_FLAG_HIDDEN);
+        else         lv_obj_add_flag(s_calDow[i], LV_OBJ_FLAG_HIDDEN); }
+    if (s_calGrid) { if (isMonth) lv_obj_clear_flag(s_calGrid, LV_OBJ_FLAG_HIDDEN);
+                     else         lv_obj_add_flag(s_calGrid, LV_OBJ_FLAG_HIDDEN); }
+
+    if (isMonth) {
+        lv_obj_add_flag(s_calList, LV_OBJ_FLAG_HIDDEN);
+        if (s_calHero) lv_obj_add_flag(s_calHero, LV_OBJ_FLAG_HIDDEN);
+        long lo, hi; char hdr[48]; cal_period(lo, hi, hdr, sizeof(hdr));
+        if (s_calPeriodLbl) lv_label_set_text(s_calPeriodLbl, hdr);
+        cal_render_month();
+        return;
+    }
+
+    lv_obj_clear_flag(s_calList, LV_OBJ_FLAG_HIDDEN);
+    if (isList) {
+        lv_obj_set_y(s_calList, 132);
+        lv_obj_set_height(s_calList, LV_VER_RES - 132 - 8);
+    } else {
+        if (s_calHero) lv_obj_add_flag(s_calHero, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_y(s_calList, 44);
+        lv_obj_set_height(s_calList, LV_VER_RES - 44 - 8);
+    }
+
+    long lo = 0, hi = 0; char hdr[48] = "";
+    if (!isList) { cal_period(lo, hi, hdr, sizeof(hdr));
+                   if (s_calPeriodLbl) lv_label_set_text(s_calPeriodLbl, hdr); }
+
+    int row = 0;
+    for (int i = 0; i < s_calAllCount && row < UI_MAX_EVENTS; i++) {
+        if (!isList) { long s = (long)s_calAll[i].start; if (s < lo || s >= hi) continue; }
+        cal_fill_row(row, s_calAll[i]);
+        s_calRowMap[row] = i;
+        row++;
+    }
+    for (int r = row; r < UI_MAX_EVENTS; r++)
+        if (s_calRow[r]) lv_obj_add_flag(s_calRow[r], LV_OBJ_FLAG_HIDDEN);
+
+    if (isList) {
+        char st[48];
+        snprintf(st, sizeof(st), "%d upcoming event%s", s_calAllCount, s_calAllCount == 1 ? "" : "s");
+        if (s_calStatus) lv_label_set_text(s_calStatus, st);
+        update_cal_hero();
+    } else if (row == 0 && s_calPeriodLbl) {
+        char e2[64]; snprintf(e2, sizeof(e2), "%s  -  no events", hdr);
+        lv_label_set_text(s_calPeriodLbl, e2);
+    }
+}
+
+static void cal_view_click_cb(lv_event_t *e) {
+    int idx = (int)(intptr_t)lv_event_get_user_data(e);
+    if (idx == s_calView) return;
+    s_calView = idx;
+    settings_set_cal_view((uint8_t)idx);    // remember across reboots
+    if (idx != CAL_LIST && s_calAnchor < 100000) s_calAnchor = (long)time(nullptr);
+    cal_render();
+}
+
+static void cal_nav_cb(lv_event_t *e) {
+    int dir = (int)(intptr_t)lv_event_get_user_data(e);      // -1 prev, +1 next
+    long base = (s_calAnchor > 100000) ? s_calAnchor : (long)time(nullptr);
+    if      (s_calView == CAL_DAY)   base += dir * 86400L;
+    else if (s_calView == CAL_WEEK)  base += dir * 7 * 86400L;
+    else if (s_calView == CAL_MONTH) base = cal_add_months(base, dir);
+    s_calAnchor = base;
+    cal_render();
+}
+
+static void cal_today_cb(lv_event_t *e) {
+    (void)e; s_calAnchor = (long)time(nullptr); cal_render();
+}
+
+static void cal_cell_cb(lv_event_t *e) {
+    int idx = (int)(intptr_t)lv_event_get_user_data(e);
+    if (idx < 0 || idx >= 42) return;
+    s_calAnchor = s_calCellEpoch[idx];
+    s_calView = CAL_DAY;
+    cal_render();
+}
+
 static void build_calendar(lv_obj_t *pg) {
     const int CW = LV_HOR_RES - SIDEBAR_W - 36;
+
+    s_calView = settings().calView;                 // restore saved view
+    if (s_calView < CAL_LIST || s_calView > CAL_MONTH) s_calView = CAL_LIST;
 
     s_calStatus = lv_label_create(pg);
     lv_label_set_text(s_calStatus, "Loading calendar...");
@@ -830,15 +1439,120 @@ static void build_calendar(lv_obj_t *pg) {
     lv_obj_set_style_text_font(s_calStatus, &lv_font_montserrat_12, 0);
     lv_obj_align(s_calStatus, LV_ALIGN_TOP_LEFT, 0, 6);
 
+    // View selector (List / Day / Week / Month), top-right, like the ticker timeframe.
+    {
+        const int bw = 56, bh = 28, bgap = 6;
+        for (int i = 0; i < 4; i++) {
+            lv_obj_t *b = lv_obj_create(pg);
+            lv_obj_set_size(b, bw, bh);
+            lv_obj_align(b, LV_ALIGN_TOP_RIGHT, -(3 - i) * (bw + bgap), 0);
+            lv_obj_set_style_border_width(b, 0, 0);
+            lv_obj_set_style_radius(b, 6, 0);
+            lv_obj_clear_flag(b, LV_OBJ_FLAG_SCROLLABLE);
+            lv_obj_add_flag(b, LV_OBJ_FLAG_CLICKABLE);
+            lv_obj_add_event_cb(b, cal_view_click_cb, LV_EVENT_CLICKED, (void *)(intptr_t)i);
+            lv_obj_t *l = lv_label_create(b);
+            lv_label_set_text(l, CAL_VIEW_LABELS[i]);
+            lv_obj_set_style_text_font(l, &lv_font_montserrat_14, 0);
+            lv_obj_set_style_text_color(l, lv_color_hex(0xe6ebf5), 0);
+            lv_obj_center(l);
+            s_calViewBtn[i] = b;
+        }
+    }
+
+    // Period navigator (prev / caption / next / Today), shown for Day/Week/Month.
+    s_calNav = lv_obj_create(pg);
+    lv_obj_set_size(s_calNav, 372, 30);
+    lv_obj_align(s_calNav, LV_ALIGN_TOP_LEFT, 0, 2);
+    lv_obj_set_style_bg_opa(s_calNav, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(s_calNav, 0, 0);
+    lv_obj_set_style_pad_all(s_calNav, 0, 0);
+    lv_obj_clear_flag(s_calNav, LV_OBJ_FLAG_SCROLLABLE);
+    {
+        lv_obj_t *pv = lv_btn_create(s_calNav);
+        lv_obj_set_size(pv, 34, 28);
+        lv_obj_align(pv, LV_ALIGN_LEFT_MID, 0, 0);
+        lv_obj_set_style_bg_color(pv, lv_color_hex(0x1c2740), 0);
+        lv_obj_add_event_cb(pv, cal_nav_cb, LV_EVENT_CLICKED, (void *)(intptr_t)(-1));
+        lv_obj_t *pl = lv_label_create(pv); lv_label_set_text(pl, LV_SYMBOL_LEFT); lv_obj_center(pl);
+
+        s_calPeriodLbl = lv_label_create(s_calNav);
+        lv_label_set_text(s_calPeriodLbl, "");
+        lv_obj_set_style_text_font(s_calPeriodLbl, &lv_font_montserrat_16, 0);
+        lv_obj_set_style_text_color(s_calPeriodLbl, lv_color_hex(0xe6ebf5), 0);
+        lv_obj_align(s_calPeriodLbl, LV_ALIGN_LEFT_MID, 42, 0);
+
+        lv_obj_t *nx = lv_btn_create(s_calNav);
+        lv_obj_set_size(nx, 32, 28);
+        lv_obj_align(nx, LV_ALIGN_LEFT_MID, 264, 0);
+        lv_obj_set_style_bg_color(nx, lv_color_hex(0x1c2740), 0);
+        lv_obj_add_event_cb(nx, cal_nav_cb, LV_EVENT_CLICKED, (void *)(intptr_t)(1));
+        lv_obj_t *nl = lv_label_create(nx); lv_label_set_text(nl, LV_SYMBOL_RIGHT); lv_obj_center(nl);
+
+        lv_obj_t *td = lv_btn_create(s_calNav);
+        lv_obj_set_size(td, 66, 28);
+        lv_obj_align(td, LV_ALIGN_LEFT_MID, 302, 0);
+        lv_obj_set_style_bg_color(td, lv_color_hex(0x2d6cdf), 0);
+        lv_obj_add_event_cb(td, cal_today_cb, LV_EVENT_CLICKED, nullptr);
+        lv_obj_t *tl = lv_label_create(td); lv_label_set_text(tl, "Today");
+        lv_obj_set_style_text_font(tl, &lv_font_montserrat_14, 0); lv_obj_center(tl);
+    }
+    lv_obj_add_flag(s_calNav, LV_OBJ_FLAG_HIDDEN);
+
+    const int rowW = CW - 12;
+
+    // "Up next" hero: the next event with a live countdown, above the scroll list.
+    const int heroH = 84;
+    s_calHero = lv_obj_create(pg);
+    lv_obj_set_size(s_calHero, rowW, heroH);
+    lv_obj_align(s_calHero, LV_ALIGN_TOP_LEFT, 0, 40);
+    lv_obj_set_style_bg_color(s_calHero, lv_color_hex(0x18294a), 0);
+    lv_obj_set_style_border_width(s_calHero, 4, 0);
+    lv_obj_set_style_border_side(s_calHero, LV_BORDER_SIDE_LEFT, 0);
+    lv_obj_set_style_border_color(s_calHero, lv_color_hex(0x2f80ed), 0);
+    lv_obj_set_style_radius(s_calHero, 10, 0);
+    lv_obj_set_style_pad_all(s_calHero, 0, 0);
+    lv_obj_clear_flag(s_calHero, LV_OBJ_FLAG_SCROLLABLE);
+
+    s_calHeroTag = lv_label_create(s_calHero);
+    lv_label_set_text(s_calHeroTag, "UP NEXT");
+    lv_obj_set_style_text_font(s_calHeroTag, &lv_font_montserrat_12, 0);
+    lv_obj_set_style_text_color(s_calHeroTag, lv_color_hex(0xffffff), 0);
+    lv_obj_set_style_bg_color(s_calHeroTag, lv_color_hex(0x2f80ed), 0);
+    lv_obj_set_style_bg_opa(s_calHeroTag, LV_OPA_COVER, 0);
+    lv_obj_set_style_pad_hor(s_calHeroTag, 8, 0);
+    lv_obj_set_style_pad_ver(s_calHeroTag, 2, 0);
+    lv_obj_set_style_radius(s_calHeroTag, 6, 0);
+    lv_obj_align(s_calHeroTag, LV_ALIGN_TOP_LEFT, 14, 10);
+
+    s_calHeroTitle = lv_label_create(s_calHero);
+    lv_label_set_text(s_calHeroTitle, "");
+    lv_obj_set_style_text_font(s_calHeroTitle, &lv_font_montserrat_20, 0);
+    lv_obj_set_style_text_color(s_calHeroTitle, lv_color_hex(0xffffff), 0);
+    lv_label_set_long_mode(s_calHeroTitle, LV_LABEL_LONG_DOT);
+    lv_obj_set_width(s_calHeroTitle, rowW - 28);
+    lv_obj_align(s_calHeroTitle, LV_ALIGN_TOP_LEFT, 14, 34);
+
+    s_calHeroWhen = lv_label_create(s_calHero);
+    lv_label_set_text(s_calHeroWhen, "");
+    lv_obj_set_style_text_font(s_calHeroWhen, &lv_font_montserrat_16, 0);
+    lv_obj_set_style_text_color(s_calHeroWhen, lv_color_hex(0x9fd0ff), 0);
+    lv_obj_align(s_calHeroWhen, LV_ALIGN_TOP_LEFT, 14, 60);
+
+    lv_obj_add_flag(s_calHero, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(s_calHero, cal_hero_cb, LV_EVENT_CLICKED, nullptr);
+    lv_obj_add_flag(s_calHero, LV_OBJ_FLAG_HIDDEN);
+
+    const int listY = 40 + heroH + 8;
     s_calList = lv_obj_create(pg);
-    lv_obj_set_size(s_calList, CW, LV_VER_RES - 40);
-    lv_obj_align(s_calList, LV_ALIGN_TOP_LEFT, 0, 32);
+    lv_obj_set_size(s_calList, CW, LV_VER_RES - listY - 8);
+    lv_obj_align(s_calList, LV_ALIGN_TOP_LEFT, 0, listY);
     lv_obj_set_style_bg_opa(s_calList, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(s_calList, 0, 0);
     lv_obj_set_style_pad_all(s_calList, 0, 0);
     lv_obj_set_scroll_dir(s_calList, LV_DIR_VER);
 
-    const int rowH = 46, gap = 6, rowW = CW - 12;
+    const int rowH = 46, gap = 6;
     for (int i = 0; i < UI_MAX_EVENTS; i++) {
         lv_obj_t *r = lv_obj_create(s_calList);
         lv_obj_set_size(r, rowW, rowH);
@@ -861,8 +1575,107 @@ static void build_calendar(lv_obj_t *pg) {
         lv_obj_set_width(s_calTitle[i], rowW - 160);
         lv_obj_align(s_calTitle[i], LV_ALIGN_LEFT_MID, 140, 0);
 
+        lv_obj_add_flag(r, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_add_event_cb(r, cal_row_cb, LV_EVENT_CLICKED, (void *)(intptr_t)i);
         lv_obj_add_flag(r, LV_OBJ_FLAG_HIDDEN);
     }
+
+    // Month grid: 7-wide weekday header + 42 day cells (hidden until Month view).
+    {
+        const int cellW = CW / 7;
+        const int gridY = 64;
+        const int cellH = (LV_VER_RES - gridY - 8) / 6;
+        static const char *DOW[7] = {"Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"};
+        for (int c = 0; c < 7; c++) {
+            lv_obj_t *d = lv_label_create(pg);
+            lv_label_set_text(d, DOW[c]);
+            lv_obj_set_style_text_font(d, &lv_font_montserrat_12, 0);
+            lv_obj_set_style_text_color(d, lv_color_hex(0x8b97b0), 0);
+            lv_obj_set_width(d, cellW);
+            lv_obj_set_style_text_align(d, LV_TEXT_ALIGN_CENTER, 0);
+            lv_obj_align(d, LV_ALIGN_TOP_LEFT, c * cellW, 44);
+            lv_obj_add_flag(d, LV_OBJ_FLAG_HIDDEN);
+            s_calDow[c] = d;
+        }
+        s_calGrid = lv_obj_create(pg);
+        lv_obj_set_size(s_calGrid, CW, LV_VER_RES - gridY - 6);
+        lv_obj_align(s_calGrid, LV_ALIGN_TOP_LEFT, 0, gridY);
+        lv_obj_set_style_bg_opa(s_calGrid, LV_OPA_TRANSP, 0);
+        lv_obj_set_style_border_width(s_calGrid, 0, 0);
+        lv_obj_set_style_pad_all(s_calGrid, 0, 0);
+        lv_obj_clear_flag(s_calGrid, LV_OBJ_FLAG_SCROLLABLE);
+        for (int i = 0; i < 42; i++) {
+            int rr = i / 7, cc = i % 7;
+            lv_obj_t *cell = lv_obj_create(s_calGrid);
+            lv_obj_set_size(cell, cellW - 4, cellH - 4);
+            lv_obj_set_pos(cell, cc * cellW, rr * cellH);
+            lv_obj_set_style_bg_color(cell, lv_color_hex(0x141c2e), 0);
+            lv_obj_set_style_border_width(cell, 0, 0);
+            lv_obj_set_style_border_color(cell, lv_color_hex(0x2f80ed), 0);
+            lv_obj_set_style_radius(cell, 6, 0);
+            lv_obj_set_style_pad_all(cell, 0, 0);
+            lv_obj_clear_flag(cell, LV_OBJ_FLAG_SCROLLABLE);
+            lv_obj_add_flag(cell, LV_OBJ_FLAG_CLICKABLE);
+            lv_obj_add_event_cb(cell, cal_cell_cb, LV_EVENT_CLICKED, (void *)(intptr_t)i);
+            s_calCell[i] = cell;
+
+            lv_obj_t *num = lv_label_create(cell);
+            lv_label_set_text(num, "");
+            lv_obj_set_style_text_font(num, &lv_font_montserrat_14, 0);
+            lv_obj_set_style_text_color(num, lv_color_hex(0xe6ebf5), 0);
+            lv_obj_align(num, LV_ALIGN_TOP_LEFT, 5, 3);
+            s_calCellNum[i] = num;
+
+            lv_obj_t *cnt = lv_label_create(cell);
+            lv_label_set_text(cnt, "");
+            lv_obj_set_style_text_font(cnt, &lv_font_montserrat_14, 0);
+            lv_obj_set_style_text_color(cnt, lv_color_hex(0x7fd1ff), 0);
+            lv_obj_align(cnt, LV_ALIGN_BOTTOM_RIGHT, -5, -3);
+            s_calCellCnt[i] = cnt;
+        }
+        lv_obj_add_flag(s_calGrid, LV_OBJ_FLAG_HIDDEN);
+    }
+
+    // Event detail popup (hidden until a row or the hero is tapped).
+    s_calCard = lv_obj_create(pg);
+    lv_obj_set_size(s_calCard, 400, 220);
+    lv_obj_align(s_calCard, LV_ALIGN_CENTER, 0, -6);
+    lv_obj_set_style_bg_color(s_calCard, lv_color_hex(0x141c2e), 0);
+    lv_obj_set_style_border_color(s_calCard, lv_color_hex(0x2f80ed), 0);
+    lv_obj_set_style_border_width(s_calCard, 2, 0);
+    lv_obj_set_style_radius(s_calCard, 12, 0);
+    lv_obj_set_style_pad_all(s_calCard, 16, 0);
+    lv_obj_clear_flag(s_calCard, LV_OBJ_FLAG_SCROLLABLE);
+
+    s_calCardTitle = lv_label_create(s_calCard);
+    lv_label_set_text(s_calCardTitle, "");
+    lv_obj_set_style_text_font(s_calCardTitle, &lv_font_montserrat_20, 0);
+    lv_obj_set_style_text_color(s_calCardTitle, lv_color_hex(0xffffff), 0);
+    lv_label_set_long_mode(s_calCardTitle, LV_LABEL_LONG_WRAP);
+    lv_obj_set_width(s_calCardTitle, 330);
+    lv_obj_align(s_calCardTitle, LV_ALIGN_TOP_LEFT, 0, 0);
+
+    s_calCardBody = lv_label_create(s_calCard);
+    lv_label_set_text(s_calCardBody, "");
+    lv_obj_set_style_text_font(s_calCardBody, &lv_font_montserrat_16, 0);
+    lv_obj_set_style_text_color(s_calCardBody, lv_color_hex(0xcdd6ea), 0);
+    lv_obj_set_style_text_line_space(s_calCardBody, 4, 0);
+    lv_label_set_long_mode(s_calCardBody, LV_LABEL_LONG_WRAP);
+    lv_obj_set_width(s_calCardBody, 366);
+    lv_obj_align(s_calCardBody, LV_ALIGN_TOP_LEFT, 0, 54);
+
+    lv_obj_t *cx = lv_btn_create(s_calCard);
+    lv_obj_set_size(cx, 26, 26);
+    lv_obj_align(cx, LV_ALIGN_TOP_RIGHT, 4, -4);
+    lv_obj_set_style_bg_color(cx, lv_color_hex(0x2f80ed), 0);
+    lv_obj_add_event_cb(cx, cal_close_cb, LV_EVENT_CLICKED, nullptr);
+    lv_obj_t *cxL = lv_label_create(cx);
+    lv_label_set_text(cxL, LV_SYMBOL_CLOSE);
+    lv_obj_center(cxL);
+
+    lv_obj_add_flag(s_calCard, LV_OBJ_FLAG_HIDDEN);
+
+    cal_render();                                   // apply the restored view + layout
 }
 
 // ---------------------------------------------------------------------------
@@ -871,8 +1684,8 @@ static void build_calendar(lv_obj_t *pg) {
 static const uint32_t AQI_COLORS[6] = {
     0x00e400, 0xffff00, 0xff7e00, 0xff0000, 0x8f3f97, 0x7e0023 };
 static const char *AQI_CATS[6] = {
-    "Good", "Moderate", "Unhealthy for sensitive", "Unhealthy",
-    "Very unhealthy", "Hazardous" };
+    "Good", "Moderate", "Sensitive", "Unhealthy",
+    "Very Unhealthy", "Hazardous" };
 static int aqi_band(int aqi) {
     if (aqi <= 50)  return 0;
     if (aqi <= 100) return 1;
@@ -882,6 +1695,26 @@ static int aqi_band(int aqi) {
     return 5;
 }
 
+// A non-interactive 270-degree ring gauge (arc with hidden knob) used for the
+// AQI and UV dials. Caller sets the value/indicator color and adds center labels.
+static lv_obj_t *make_ring(lv_obj_t *parent, int size, int arcW, int maxVal) {
+    lv_obj_t *a = lv_arc_create(parent);
+    lv_obj_set_size(a, size, size);
+    lv_arc_set_rotation(a, 135);
+    lv_arc_set_bg_angles(a, 0, 270);
+    lv_arc_set_range(a, 0, maxVal);
+    lv_arc_set_value(a, 0);
+    lv_obj_remove_style(a, NULL, LV_PART_KNOB);
+    lv_obj_clear_flag(a, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_style_bg_opa(a, LV_OPA_TRANSP, LV_PART_MAIN);
+    lv_obj_set_style_border_width(a, 0, LV_PART_MAIN);
+    lv_obj_set_style_arc_width(a, arcW, LV_PART_MAIN);
+    lv_obj_set_style_arc_color(a, lv_color_hex(0x24304a), LV_PART_MAIN);
+    lv_obj_set_style_arc_width(a, arcW, LV_PART_INDICATOR);
+    lv_obj_set_style_arc_color(a, lv_color_hex(0x39d98a), LV_PART_INDICATOR);
+    return a;
+}
+
 static void build_air(lv_obj_t *pg) {
     const int CW = LV_HOR_RES - SIDEBAR_W - 36;
 
@@ -889,50 +1722,51 @@ static void build_air(lv_obj_t *pg) {
     lv_label_set_text(s_airStatus, "Loading air quality...");
     lv_obj_set_style_text_color(s_airStatus, lv_color_hex(0x8b97b0), 0);
     lv_obj_set_style_text_font(s_airStatus, &lv_font_montserrat_12, 0);
-    lv_obj_align(s_airStatus, LV_ALIGN_TOP_LEFT, 0, 6);
+    lv_obj_align(s_airStatus, LV_ALIGN_TOP_LEFT, 0, 2);
 
-    s_airAqi = lv_label_create(pg);
+    // US AQI ring gauge (left).
+    s_airAqiArc = make_ring(pg, 156, 15, 300);
+    lv_obj_align(s_airAqiArc, LV_ALIGN_TOP_LEFT, 4, 18);
+
+    s_airAqi = lv_label_create(s_airAqiArc);
     lv_label_set_text(s_airAqi, "--");
     lv_obj_set_style_text_font(s_airAqi, &lv_font_montserrat_48, 0);
     lv_obj_set_style_text_color(s_airAqi, lv_color_hex(0xe6ebf5), 0);
-    lv_obj_align(s_airAqi, LV_ALIGN_TOP_LEFT, 0, 30);
+    lv_obj_align(s_airAqi, LV_ALIGN_CENTER, 0, -10);
 
-    lv_obj_t *aqiUnit = lv_label_create(pg);
+    lv_obj_t *aqiUnit = lv_label_create(s_airAqiArc);
     lv_label_set_text(aqiUnit, "US AQI");
-    lv_obj_set_style_text_font(aqiUnit, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_font(aqiUnit, &lv_font_montserrat_12, 0);
     lv_obj_set_style_text_color(aqiUnit, lv_color_hex(0x8b97b0), 0);
-    lv_obj_align_to(aqiUnit, s_airAqi, LV_ALIGN_OUT_RIGHT_BOTTOM, 12, -10);
+    lv_obj_align(aqiUnit, LV_ALIGN_CENTER, 0, 26);
 
     s_airCat = lv_label_create(pg);
     lv_label_set_text(s_airCat, "");
-    lv_obj_set_style_text_font(s_airCat, &lv_font_montserrat_20, 0);
+    lv_obj_set_width(s_airCat, 168);
+    lv_obj_set_style_text_align(s_airCat, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_style_text_font(s_airCat, &lv_font_montserrat_16, 0);
     lv_obj_set_style_text_color(s_airCat, lv_color_hex(0xe6ebf5), 0);
-    lv_obj_align(s_airCat, LV_ALIGN_TOP_LEFT, 0, 96);
+    lv_obj_align(s_airCat, LV_ALIGN_TOP_LEFT, 0, 200);
 
-    // UV index card (top-right).
-    lv_obj_t *uvCard = lv_obj_create(pg);
-    lv_obj_set_size(uvCard, 150, 92);
-    lv_obj_align(uvCard, LV_ALIGN_TOP_RIGHT, 0, 30);
-    lv_obj_set_style_bg_color(uvCard, lv_color_hex(0x141c2e), 0);
-    lv_obj_set_style_border_width(uvCard, 0, 0);
-    lv_obj_set_style_radius(uvCard, 8, 0);
-    lv_obj_clear_flag(uvCard, LV_OBJ_FLAG_SCROLLABLE);
+    // UV index ring gauge (right).
+    s_airUvArc = make_ring(pg, 128, 13, 12);
+    lv_obj_align(s_airUvArc, LV_ALIGN_TOP_RIGHT, -8, 24);
 
-    lv_obj_t *uvName = lv_label_create(uvCard);
-    lv_label_set_text(uvName, "UV Index");
-    lv_obj_set_style_text_font(uvName, &lv_font_montserrat_14, 0);
-    lv_obj_set_style_text_color(uvName, lv_color_hex(0x8b97b0), 0);
-    lv_obj_align(uvName, LV_ALIGN_TOP_MID, 0, 4);
-
-    s_airUv = lv_label_create(uvCard);
+    s_airUv = lv_label_create(s_airUvArc);
     lv_label_set_text(s_airUv, "--");
     lv_obj_set_style_text_font(s_airUv, &lv_font_montserrat_28, 0);
     lv_obj_set_style_text_color(s_airUv, lv_color_hex(0xe6ebf5), 0);
-    lv_obj_align(s_airUv, LV_ALIGN_BOTTOM_MID, 0, -6);
+    lv_obj_align(s_airUv, LV_ALIGN_CENTER, 0, -6);
+
+    lv_obj_t *uvName = lv_label_create(s_airUvArc);
+    lv_label_set_text(uvName, "UV");
+    lv_obj_set_style_text_font(uvName, &lv_font_montserrat_12, 0);
+    lv_obj_set_style_text_color(uvName, lv_color_hex(0x8b97b0), 0);
+    lv_obj_align(uvName, LV_ALIGN_CENTER, 0, 20);
 
     lv_obj_t **slots[4] = { &s_airPm25, &s_airPm10, &s_airO3, &s_airNo2 };
     const char *names[4] = { "PM2.5", "PM10", "Ozone", "NO2" };
-    const int rowH = 40, gap = 6, y0 = 138, rowW = CW - 12;
+    const int rowH = 38, gap = 6, y0 = 232, rowW = CW - 12;
     for (int i = 0; i < 4; i++) {
         lv_obj_t *r = lv_obj_create(pg);
         lv_obj_set_size(r, rowW, rowH);
@@ -955,12 +1789,113 @@ static void build_air(lv_obj_t *pg) {
         lv_obj_align(val, LV_ALIGN_RIGHT_MID, -12, 0);
         *slots[i] = val;
     }
+}
 
-    s_airMotion = lv_label_create(pg);
-    lv_label_set_text(s_airMotion, "Motion: --");
-    lv_obj_set_style_text_font(s_airMotion, &lv_font_montserrat_16, 0);
-    lv_obj_set_style_text_color(s_airMotion, lv_color_hex(0x8b97b0), 0);
-    lv_obj_align(s_airMotion, LV_ALIGN_TOP_LEFT, 0, y0 + 4 * (rowH + gap) + 10);
+// Autoscaling line + area-fill sparkline for a diag metric (reuses the ticker look).
+static void draw_diag_spark(lv_obj_t *cv, const float *data, int count,
+                            bool autoscale, float loFixed, float hiFixed, uint32_t color,
+                            int w = DSP_W, int h = DSP_H) {
+    if (!cv) return;
+    lv_canvas_fill_bg(cv, lv_color_hex(0x141c2e), LV_OPA_COVER);
+    if (count < 2) return;
+    float lo = loFixed, hi = hiFixed;
+    if (autoscale) {
+        lo = 1e30f; hi = -1e30f;
+        for (int j = 0; j < count; j++) { if (data[j] < lo) lo = data[j]; if (data[j] > hi) hi = data[j]; }
+        float pad = (hi - lo) * 0.15f; if (pad < 1.0f) pad = 1.0f;
+        lo -= pad; hi += pad;
+    }
+    float span = hi - lo; if (span < 1e-6f) span = 1.0f;
+    static lv_point_t pts[DIAG_N];
+    const int m = 4;
+    for (int j = 0; j < count; j++) {
+        int x = (int)((int64_t)j * (w - 1) / (count - 1));
+        float f = (data[j] - lo) / span; if (f < 0) f = 0; if (f > 1) f = 1;
+        int y = (h - 1 - m) - (int)(f * (h - 1 - 2 * m));
+        pts[j].x = (lv_coord_t)x; pts[j].y = (lv_coord_t)y;
+    }
+    lv_draw_rect_dsc_t fill; lv_draw_rect_dsc_init(&fill);
+    fill.bg_color = lv_color_hex(color); fill.bg_opa = LV_OPA_20;
+    const int baseY = h - 1;
+    for (int s = 0; s < count - 1; s++) {
+        int xa = pts[s].x, ya = pts[s].y, xb = pts[s + 1].x, yb = pts[s + 1].y;
+        if (xb <= xa) continue;
+        for (int x = (s == 0 ? xa : xa + 1); x <= xb; x++) {
+            int y = ya + (yb - ya) * (x - xa) / (xb - xa);
+            if (y < baseY) lv_canvas_draw_rect(cv, x, y, 1, baseY - y + 1, &fill);
+        }
+    }
+    lv_draw_line_dsc_t d; lv_draw_line_dsc_init(&d);
+    d.color = lv_color_hex(color); d.width = 2; d.round_start = d.round_end = 1;
+    lv_canvas_draw_line(cv, pts, count, &d);
+}
+
+// Sampled every ui_tick (even off-page) so opening Diag shows recent history.
+static void diag_sample() {
+    bool online = net_state() == NetState::Connected;
+    float heapKb = ESP.getFreeHeap() / 1024.0f;
+    float rssi   = online ? (float)WiFi.RSSI() : -100.0f;   // floor when offline
+    float tempF  = temperatureRead() * 9.0f / 5.0f + 32.0f; // ESP32-S3 on-die sensor
+
+    // Render FPS since the last sample: frames presented / elapsed seconds.
+    static uint32_t lastFrames = 0, lastMs = 0;
+    uint32_t nowMs = millis(), frames = display_frame_count();
+    float fps = 0.0f;
+    if (lastMs && nowMs > lastMs) fps = (frames - lastFrames) * 1000.0f / (nowMs - lastMs);
+    lastFrames = frames; lastMs = nowMs;
+
+    if (s_diagCount < DIAG_N) {
+        s_heapHist[s_diagCount] = heapKb;
+        s_rssiHist[s_diagCount] = rssi;
+        s_tempHist[s_diagCount] = tempF;
+        s_fpsHist[s_diagCount]  = fps;
+        s_diagCount++;
+    } else {
+        memmove(s_heapHist, s_heapHist + 1, (DIAG_N - 1) * sizeof(float));
+        memmove(s_rssiHist, s_rssiHist + 1, (DIAG_N - 1) * sizeof(float));
+        memmove(s_tempHist, s_tempHist + 1, (DIAG_N - 1) * sizeof(float));
+        memmove(s_fpsHist,  s_fpsHist + 1,  (DIAG_N - 1) * sizeof(float));
+        s_heapHist[DIAG_N - 1] = heapKb;
+        s_rssiHist[DIAG_N - 1] = rssi;
+        s_tempHist[DIAG_N - 1] = tempF;
+        s_fpsHist[DIAG_N - 1]  = fps;
+    }
+}
+
+// A labeled horizontal usage bar (name + track + value) for the Diag resource block.
+static lv_obj_t *make_stat_bar(lv_obj_t *pg, const char *name, int x, int y, lv_obj_t **valOut) {
+    lv_obj_t *nm = lv_label_create(pg);
+    lv_label_set_text(nm, name);
+    lv_obj_set_style_text_font(nm, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_color(nm, lv_color_hex(0xcdd6ea), 0);
+    lv_obj_align(nm, LV_ALIGN_TOP_LEFT, x, y);
+
+    lv_obj_t *bar = lv_bar_create(pg);
+    lv_obj_set_size(bar, 150, 12);
+    lv_obj_align(bar, LV_ALIGN_TOP_LEFT, x + 58, y + 3);
+    lv_obj_set_style_bg_color(bar, lv_color_hex(0x2a3550), LV_PART_MAIN);
+    lv_obj_set_style_radius(bar, 6, LV_PART_MAIN);
+    lv_obj_set_style_radius(bar, 6, LV_PART_INDICATOR);
+    lv_bar_set_range(bar, 0, 100);
+    lv_bar_set_value(bar, 0, LV_ANIM_OFF);
+
+    lv_obj_t *v = lv_label_create(pg);
+    lv_label_set_text(v, "--");
+    lv_obj_set_style_text_font(v, &lv_font_montserrat_12, 0);
+    lv_obj_set_style_text_color(v, lv_color_hex(0x8b97b0), 0);
+    lv_obj_align(v, LV_ALIGN_TOP_LEFT, x + 214, y + 1);
+    *valOut = v;
+    return bar;
+}
+
+// Set a usage bar: pct drives fill + green/amber/red pressure color, txt is the caption.
+static void set_stat_bar(lv_obj_t *bar, lv_obj_t *val, int pct, const char *txt) {
+    if (!bar) return;
+    if (pct < 0) pct = 0; if (pct > 100) pct = 100;
+    lv_bar_set_value(bar, pct, LV_ANIM_OFF);
+    uint32_t c = pct < 70 ? 0x39d98a : (pct < 85 ? 0xffb347 : 0xff5c5c);
+    lv_obj_set_style_bg_color(bar, lv_color_hex(c), LV_PART_INDICATOR);
+    if (val) lv_label_set_text(val, txt);
 }
 
 static void build_diag(lv_obj_t *pg) {
@@ -976,6 +1911,110 @@ static void build_diag(lv_obj_t *pg) {
     lv_obj_set_style_text_color(s_diagLbl, lv_color_hex(0xcdd6ea), 0);
     lv_obj_set_style_text_line_space(s_diagLbl, 6, 0);
     lv_obj_align(s_diagLbl, LV_ALIGN_TOP_LEFT, 0, 40);
+
+    // Right column: live heap + RSSI trend sparklines (canvas bufs live in PSRAM).
+    static lv_color_t *heapBuf = nullptr, *rssiBuf = nullptr;
+    const int RX = 280;
+
+    lv_obj_t *ht = lv_label_create(pg);
+    lv_label_set_text(ht, "Free heap (KB)");
+    lv_obj_set_style_text_font(ht, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_color(ht, lv_color_hex(0x8b97b0), 0);
+    lv_obj_align(ht, LV_ALIGN_TOP_LEFT, RX, 42);
+    s_diagHeapVal = lv_label_create(pg);
+    lv_label_set_text(s_diagHeapVal, "--");
+    lv_obj_set_style_text_font(s_diagHeapVal, &lv_font_montserrat_16, 0);
+    lv_obj_set_style_text_color(s_diagHeapVal, lv_color_hex(0x39d98a), 0);
+    lv_obj_align(s_diagHeapVal, LV_ALIGN_TOP_LEFT, RX + DSP_W - 70, 40);
+    if (!heapBuf) heapBuf = (lv_color_t *)heap_caps_malloc(
+        DSP_W * DSP_H * sizeof(lv_color_t), MALLOC_CAP_SPIRAM);
+    s_diagHeapSpark = lv_canvas_create(pg);
+    lv_canvas_set_buffer(s_diagHeapSpark, heapBuf, DSP_W, DSP_H, LV_IMG_CF_TRUE_COLOR);
+    lv_obj_align(s_diagHeapSpark, LV_ALIGN_TOP_LEFT, RX, 66);
+    lv_canvas_fill_bg(s_diagHeapSpark, lv_color_hex(0x141c2e), LV_OPA_COVER);
+
+    lv_obj_t *rt = lv_label_create(pg);
+    lv_label_set_text(rt, "Wi-Fi RSSI (dBm)");
+    lv_obj_set_style_text_font(rt, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_color(rt, lv_color_hex(0x8b97b0), 0);
+    lv_obj_align(rt, LV_ALIGN_TOP_LEFT, RX, 152);
+    s_diagRssiVal = lv_label_create(pg);
+    lv_label_set_text(s_diagRssiVal, "--");
+    lv_obj_set_style_text_font(s_diagRssiVal, &lv_font_montserrat_16, 0);
+    lv_obj_set_style_text_color(s_diagRssiVal, lv_color_hex(0x5aa9ff), 0);
+    lv_obj_align(s_diagRssiVal, LV_ALIGN_TOP_LEFT, RX + DSP_W - 90, 150);
+    if (!rssiBuf) rssiBuf = (lv_color_t *)heap_caps_malloc(
+        DSP_W * DSP_H * sizeof(lv_color_t), MALLOC_CAP_SPIRAM);
+    s_diagRssiSpark = lv_canvas_create(pg);
+    lv_canvas_set_buffer(s_diagRssiSpark, rssiBuf, DSP_W, DSP_H, LV_IMG_CF_TRUE_COLOR);
+    lv_obj_align(s_diagRssiSpark, LV_ALIGN_TOP_LEFT, RX, 176);
+    lv_canvas_fill_bg(s_diagRssiSpark, lv_color_hex(0x141c2e), LV_OPA_COVER);
+
+    // Resource usage bars (internal RAM, PSRAM, flash) under the sparklines.
+    s_diagRamBar   = make_stat_bar(pg, "RAM",   RX, 256, &s_diagRamVal);
+    s_diagPsramBar = make_stat_bar(pg, "PSRAM", RX, 290, &s_diagPsramVal);
+    s_diagFlashBar = make_stat_bar(pg, "Flash", RX, 324, &s_diagFlashVal);
+
+    // Wi-Fi signal strength: 4 ascending bars + quality caption.
+    lv_obj_t *sl = lv_label_create(pg);
+    lv_label_set_text(sl, "Signal");
+    lv_obj_set_style_text_font(sl, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_color(sl, lv_color_hex(0x8b97b0), 0);
+    lv_obj_align(sl, LV_ALIGN_TOP_LEFT, RX, 356);
+    const int bw = 16, bgap = 8, baseY = 428;
+    for (int i = 0; i < 4; i++) {
+        int h = 14 + i * 14;
+        s_diagSigBar[i] = lv_obj_create(pg);
+        lv_obj_set_size(s_diagSigBar[i], bw, h);
+        lv_obj_align(s_diagSigBar[i], LV_ALIGN_TOP_LEFT, RX + i * (bw + bgap), baseY - h);
+        lv_obj_set_style_border_width(s_diagSigBar[i], 0, 0);
+        lv_obj_set_style_radius(s_diagSigBar[i], 3, 0);
+        lv_obj_set_style_bg_color(s_diagSigBar[i], lv_color_hex(0x2a3550), 0);
+    }
+    s_diagSigTxt = lv_label_create(pg);
+    lv_label_set_text(s_diagSigTxt, "--");
+    lv_obj_set_style_text_font(s_diagSigTxt, &lv_font_montserrat_16, 0);
+    lv_obj_set_style_text_color(s_diagSigTxt, lv_color_hex(0x8b97b0), 0);
+    lv_obj_align(s_diagSigTxt, LV_ALIGN_TOP_LEFT, RX + 4 * (bw + bgap) + 14, baseY - 26);
+
+    // Left column (below the text stats): board-only trend charts — the ESP32-S3
+    // on-die temperature sensor and the measured render FPS. Canvas bufs in PSRAM.
+    static lv_color_t *tBuf = nullptr, *fBuf = nullptr;
+    const int LSW = 260, LSH = 56, LX = 0;
+
+    lv_obj_t *tt = lv_label_create(pg);
+    lv_label_set_text(tt, "Die temp (F)");
+    lv_obj_set_style_text_font(tt, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_color(tt, lv_color_hex(0x8b97b0), 0);
+    lv_obj_align(tt, LV_ALIGN_TOP_LEFT, LX, 250);
+    s_diagTempVal = lv_label_create(pg);
+    lv_label_set_text(s_diagTempVal, "--");
+    lv_obj_set_style_text_font(s_diagTempVal, &lv_font_montserrat_16, 0);
+    lv_obj_set_style_text_color(s_diagTempVal, lv_color_hex(0xffb454), 0);
+    lv_obj_align(s_diagTempVal, LV_ALIGN_TOP_LEFT, LX + LSW - 56, 248);
+    if (!tBuf) tBuf = (lv_color_t *)heap_caps_malloc(
+        LSW * LSH * sizeof(lv_color_t), MALLOC_CAP_SPIRAM);
+    s_diagTempSpark = lv_canvas_create(pg);
+    lv_canvas_set_buffer(s_diagTempSpark, tBuf, LSW, LSH, LV_IMG_CF_TRUE_COLOR);
+    lv_obj_align(s_diagTempSpark, LV_ALIGN_TOP_LEFT, LX, 272);
+    lv_canvas_fill_bg(s_diagTempSpark, lv_color_hex(0x141c2e), LV_OPA_COVER);
+
+    lv_obj_t *ft = lv_label_create(pg);
+    lv_label_set_text(ft, "Render (FPS)");
+    lv_obj_set_style_text_font(ft, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_color(ft, lv_color_hex(0x8b97b0), 0);
+    lv_obj_align(ft, LV_ALIGN_TOP_LEFT, LX, 346);
+    s_diagFpsVal = lv_label_create(pg);
+    lv_label_set_text(s_diagFpsVal, "--");
+    lv_obj_set_style_text_font(s_diagFpsVal, &lv_font_montserrat_16, 0);
+    lv_obj_set_style_text_color(s_diagFpsVal, lv_color_hex(0xa78bfa), 0);
+    lv_obj_align(s_diagFpsVal, LV_ALIGN_TOP_LEFT, LX + LSW - 56, 344);
+    if (!fBuf) fBuf = (lv_color_t *)heap_caps_malloc(
+        LSW * LSH * sizeof(lv_color_t), MALLOC_CAP_SPIRAM);
+    s_diagFpsSpark = lv_canvas_create(pg);
+    lv_canvas_set_buffer(s_diagFpsSpark, fBuf, LSW, LSH, LV_IMG_CF_TRUE_COLOR);
+    lv_obj_align(s_diagFpsSpark, LV_ALIGN_TOP_LEFT, LX, 368);
+    lv_canvas_fill_bg(s_diagFpsSpark, lv_color_hex(0x141c2e), LV_OPA_COVER);
 }
 
 void ui_init() {
@@ -997,6 +2036,65 @@ void ui_init() {
     ui_show_page(PAGE_HOME);
 }
 
+static void update_cal_hero() {
+    if (!s_calHero) return;
+    if (s_calView != CAL_LIST) { lv_obj_add_flag(s_calHero, LV_OBJ_FLAG_HIDDEN); return; }
+    time_t now = time(nullptr);
+    if (now < 100000 || s_calAllCount == 0) {
+        lv_obj_add_flag(s_calHero, LV_OBJ_FLAG_HIDDEN);
+        return;
+    }
+    // First event that hasn't started yet (list is sorted ascending; allow a 60s grace).
+    int idx = -1;
+    for (int i = 0; i < s_calAllCount; i++) {
+        if ((long)s_calAll[i].start > (long)now - 60) { idx = i; break; }
+    }
+    if (idx < 0) { lv_obj_add_flag(s_calHero, LV_OBJ_FLAG_HIDDEN); return; }
+    lv_obj_clear_flag(s_calHero, LV_OBJ_FLAG_HIDDEN);
+    s_calHeroIdx = idx;
+
+    const CalEvent &e = s_calAll[idx];
+    long diff = (long)e.start - (long)now;                 // seconds until start
+
+    bool nowish = diff <= 60;
+    uint32_t accent = nowish ? 0x1f9d57 : 0x2f80ed;
+    lv_label_set_text(s_calHeroTag, nowish ? "NOW" : "UP NEXT");
+    lv_obj_set_style_bg_color(s_calHeroTag, lv_color_hex(accent), 0);
+    lv_obj_set_style_border_color(s_calHero, lv_color_hex(accent), 0);
+    lv_label_set_text(s_calHeroTitle, e.title.length() ? e.title.c_str() : "(no title)");
+
+    char cd[24];
+    if      (diff <= 60)   snprintf(cd, sizeof(cd), "now");
+    else if (diff < 3600)  snprintf(cd, sizeof(cd), "in %ld min", diff / 60);
+    else if (diff < 86400) snprintf(cd, sizeof(cd), "in %ldh %02ldm", diff / 3600, (diff % 3600) / 60);
+    else                   snprintf(cd, sizeof(cd), "in %ld days", diff / 86400);
+
+    static const char *WD[7] = {"Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"};
+    time_t et = (time_t)e.start; struct tm tm; localtime_r(&et, &tm);
+    time_t nt = now;            struct tm nm; localtime_r(&nt, &nm);
+    int dayDelta = (tm.tm_year == nm.tm_year) ? (tm.tm_yday - nm.tm_yday)
+                                              : (tm.tm_year > nm.tm_year ? 9 : -9);
+    char day[16];
+    if      (dayDelta == 0) snprintf(day, sizeof(day), "Today");
+    else if (dayDelta == 1) snprintf(day, sizeof(day), "Tomorrow");
+    else { int wd = tm.tm_wday; if (wd < 0 || wd > 6) wd = 0;
+           snprintf(day, sizeof(day), "%s %d/%d", WD[wd], tm.tm_mon + 1, tm.tm_mday); }
+
+    char when[56];
+    if (e.allDay) {
+        snprintf(when, sizeof(when), "%s  -  All day", day);
+    } else {
+        char tbuf[12];
+        if (settings().use24hClock) snprintf(tbuf, sizeof(tbuf), "%02d:%02d", tm.tm_hour, tm.tm_min);
+        else { int h12 = tm.tm_hour % 12; if (h12 == 0) h12 = 12;
+               snprintf(tbuf, sizeof(tbuf), "%d:%02d %s", h12, tm.tm_min, tm.tm_hour < 12 ? "AM" : "PM"); }
+        snprintf(when, sizeof(when), "%s %s  -  %s", day, tbuf, cd);
+    }
+    lv_label_set_text(s_calHeroWhen, when);
+    lv_obj_set_style_text_color(s_calHeroWhen,
+                                lv_color_hex(diff < 600 ? 0xffd166 : 0x9fd0ff), 0);
+}
+
 static void update_clock() {
     time_t now = time(nullptr);
     if (now < 100000) return;   // not synced yet
@@ -1009,6 +2107,7 @@ static void update_clock() {
     char dbuf[48];
     strftime(dbuf, sizeof(dbuf), "%A, %B %d", &t);
     lv_label_set_text(s_clockDate, dbuf);
+    draw_sky(t.tm_hour * 60 + t.tm_min);
 }
 
 static void update_config_page() {
@@ -1066,30 +2165,89 @@ static void update_diag_page() {
     char b[512];
     snprintf(b, sizeof(b),
         "Uptime:   %lud %02lu:%02lu:%02lu\n"
-        "Free heap:  %u KB\n"
-        "Free PSRAM: %u KB\n"
         "Wi-Fi:  %s\n"
         "SSID:   %s\n"
-        "RSSI:   %d dBm\n"
         "IP:     %s\n"
         "MAC:    %s\n"
         "Reset:  %s\n"
         "Firmware: %s %s\n"
         "LVGL: %d.%d.%d",
         (unsigned long)dd, (unsigned long)hh, (unsigned long)mm, (unsigned long)ss,
-        (unsigned)(heap / 1024), (unsigned)(psram / 1024),
         online ? "connected" : "offline",
         online ? WiFi.SSID().c_str() : "-",
-        online ? (int)WiFi.RSSI() : 0,
         online ? WiFi.localIP().toString().c_str() : "-",
         WiFi.macAddress().c_str(),
         reset_reason_str(esp_reset_reason()),
         __DATE__, __TIME__,
         LVGL_VERSION_MAJOR, LVGL_VERSION_MINOR, LVGL_VERSION_PATCH);
     lv_label_set_text(s_diagLbl, b);
+
+    // Live trend sparklines: heap autoscales; RSSI is fixed to a readable dBm band.
+    draw_diag_spark(s_diagHeapSpark, s_heapHist, s_diagCount, true, 0, 0, 0x39d98a);
+    draw_diag_spark(s_diagRssiSpark, s_rssiHist, s_diagCount, false, -90.0f, -30.0f, 0x5aa9ff);
+    // Board-only trends: die temperature + render FPS (autoscaled, narrower canvas).
+    draw_diag_spark(s_diagTempSpark, s_tempHist, s_diagCount, true, 0, 0, 0xffb454, 260, 56);
+    draw_diag_spark(s_diagFpsSpark,  s_fpsHist,  s_diagCount, true, 0, 0, 0xa78bfa, 260, 56);
+    char v[24];
+    snprintf(v, sizeof(v), "%u KB", (unsigned)(heap / 1024));
+    lv_label_set_text(s_diagHeapVal, v);
+    if (online) { snprintf(v, sizeof(v), "%d", (int)WiFi.RSSI()); lv_label_set_text(s_diagRssiVal, v); }
+    else        { lv_label_set_text(s_diagRssiVal, "--"); }
+    if (s_diagCount > 0) {
+        snprintf(v, sizeof(v), "%.0fF", s_tempHist[s_diagCount - 1]);
+        lv_label_set_text(s_diagTempVal, v);
+        snprintf(v, sizeof(v), "%.1f", s_fpsHist[s_diagCount - 1]);
+        lv_label_set_text(s_diagFpsVal, v);
+    }
+
+    // Resource usage bars.
+    char t[28];
+    size_t heapTot = ESP.getHeapSize();
+    int ramPct = heapTot ? (int)(100 - ((uint64_t)heap * 100 / heapTot)) : 0;
+    snprintf(t, sizeof(t), "%u/%u KB", (unsigned)((heapTot - heap) / 1024), (unsigned)(heapTot / 1024));
+    set_stat_bar(s_diagRamBar, s_diagRamVal, ramPct, t);
+
+    size_t psTot = heap_caps_get_total_size(MALLOC_CAP_SPIRAM);
+    int psPct = psTot ? (int)(100 - ((uint64_t)psram * 100 / psTot)) : 0;
+    snprintf(t, sizeof(t), "%.1f/%.1f MB", (psTot - psram) / 1048576.0, psTot / 1048576.0);
+    set_stat_bar(s_diagPsramBar, s_diagPsramVal, psPct, t);
+
+    size_t flUsed = ESP.getSketchSize();
+    size_t flTot  = flUsed + ESP.getFreeSketchSpace();
+    int flPct = flTot ? (int)((uint64_t)flUsed * 100 / flTot) : 0;
+    snprintf(t, sizeof(t), "%.1f/%.1f MB", flUsed / 1048576.0, flTot / 1048576.0);
+    set_stat_bar(s_diagFlashBar, s_diagFlashVal, flPct, t);
+
+    // Wi-Fi signal strength bars + quality caption.
+    int bars = 0; const char *q = "offline"; uint32_t sc = 0x8b97b0;
+    if (online) {
+        int r = (int)WiFi.RSSI();
+        if      (r >= -55) { bars = 4; q = "Excellent"; sc = 0x39d98a; }
+        else if (r >= -65) { bars = 3; q = "Good";      sc = 0x39d98a; }
+        else if (r >= -75) { bars = 2; q = "Fair";      sc = 0xffb347; }
+        else               { bars = 1; q = "Weak";      sc = 0xff5c5c; }
+    }
+    for (int i = 0; i < 4; i++)
+        lv_obj_set_style_bg_color(s_diagSigBar[i], lv_color_hex(i < bars ? sc : 0x2a3550), 0);
+    lv_label_set_text(s_diagSigTxt, q);
+    lv_obj_set_style_text_color(s_diagSigTxt, lv_color_hex(sc), 0);
+}
+
+static void animate_weather() {
+    if (!s_wxIcon || s_wxCode < 0) return;
+    lv_canvas_fill_bg(s_wxIcon, lv_color_hex(0x0f1420), LV_OPA_COVER);
+    wx_draw(s_wxIcon, 48, 48, 38, s_wxCode, (int)s_wxFrame);
 }
 
 void ui_tick() {
+    // Home-page weather glyph animates faster than the 500ms housekeeping tick.
+    static uint32_t lastAnim = 0;
+    if (s_active == PAGE_HOME && s_wxCode >= 0 && millis() - lastAnim >= 150) {
+        lastAnim = millis();
+        s_wxFrame++;
+        animate_weather();
+    }
+
     static uint32_t last = 0;
     if (millis() - last < 500) return;
     last = millis();
@@ -1105,9 +2263,11 @@ void ui_tick() {
         prevState = st;
     }
 
+    diag_sample();
     update_clock();
     update_config_page();
     update_diag_page();
+    if (s_active == PAGE_CALENDAR) update_cal_hero();
 }
 
 // ---------------------------------------------------------------------------
@@ -1136,13 +2296,13 @@ void ui_weather_set(int code, const String &summary, float tempC, int humidity, 
                  summary.c_str(), humidity, wind);
         lv_label_set_text(s_weatherBody, b);
     }
-    if (s_wxIcon) {
-        lv_canvas_fill_bg(s_wxIcon, lv_color_hex(0x0f1420), LV_OPA_COVER);
-        wx_draw(s_wxIcon, 48, 48, 38, code);
-    }
+    s_wxCode = code;
+    s_wxHave = true;                                   // enable offline last-good (#1)
+    animate_weather();
 }
 
 void ui_weather_error(const String &msg) {
+    if (s_wxHave) return;                               // keep last-good conditions when offline (#1)
     if (s_weatherBody) lv_label_set_text(s_weatherBody, msg.c_str());
 }
 
@@ -1196,6 +2356,15 @@ static void canvas_ring(lv_obj_t *cv, int cx, int cy, int r, lv_color_t col) {
     }
 }
 
+static inline String flight_id(const FlightRow &r) {
+    return r.tail.length() ? r.tail : r.callsign;
+}
+static int trail_find(const String &id) {
+    for (int k = 0; k < UI_MAX_FLIGHTS; k++)
+        if (s_trails[k].used && s_trails[k].id == id) return k;
+    return -1;
+}
+
 static void draw_radar() {
     if (!s_flightsRadar) return;
     lv_obj_t *cv = s_flightsRadar;
@@ -1229,12 +2398,29 @@ static void draw_radar() {
     lv_canvas_draw_text(cv, cx + radiusPx + 4,  cy - 9,  16, &cdsc, "E");
     lv_canvas_draw_text(cv, cx - radiusPx - 16, cy - 9,  16, &cdsc, "W");
 
+    // Rotating sweep arm with a fading phosphor trail (north-up, same convention
+    // as the plane bearings below).
+    lv_draw_line_dsc_t sweep; lv_draw_line_dsc_init(&sweep);
+    sweep.width = 2; sweep.round_start = 1; sweep.round_end = 1;
+    for (int t = 5; t >= 0; t--) {
+        float ang = (s_sweepDeg - t * 7.0f) * DEG2RAD;
+        int ex = cx + (int)lroundf(sinf(ang) * radiusPx);
+        int ey = cy - (int)lroundf(cosf(ang) * radiusPx);
+        sweep.color = lv_color_hex(0x33ff88);
+        sweep.opa   = (lv_opa_t)(70 + (5 - t) * 34);   // faint tail -> bright arm
+        lv_point_t sp[2] = {{(lv_coord_t)cx, (lv_coord_t)cy}, {(lv_coord_t)ex, (lv_coord_t)ey}};
+        lv_canvas_draw_line(cv, sp, 2, &sweep);
+    }
+
     lv_draw_rect_dsc_t arrow; lv_draw_rect_dsc_init(&arrow);
     arrow.bg_color = lv_color_hex(0xffb020); arrow.bg_opa = LV_OPA_COVER;
     lv_draw_rect_dsc_t dot; lv_draw_rect_dsc_init(&dot);
     dot.bg_color = lv_color_hex(0xffb020); dot.bg_opa = LV_OPA_COVER; dot.radius = LV_RADIUS_CIRCLE;
     lv_draw_label_dsc_t plbl; lv_draw_label_dsc_init(&plbl);
     plbl.color = lv_color_hex(0xe6ebf5); plbl.font = &lv_font_montserrat_12;
+    lv_draw_line_dsc_t lead; lv_draw_line_dsc_init(&lead);   // velocity leader line
+    lead.width = 2; lead.round_start = 1; lead.round_end = 1;
+    lead.color = lv_color_hex(0xffb020); lead.opa = LV_OPA_50;
 
     for (int i = 0; i < UI_MAX_FLIGHTS; i++) s_planePx[i] = -10000;   // reset hit targets
     for (int i = 0; i < s_flightCount; i++) {
@@ -1246,11 +2432,47 @@ static void draw_radar() {
         int py = cy - (int)lroundf(rr * cosf(br));
         s_planePx[i] = (lv_coord_t)px; s_planePy[i] = (lv_coord_t)py;
 
+        // Flown-path breadcrumb trail (older segments fade out).
+        int tk = trail_find(flight_id(s_flightRows[i]));
+        if (tk >= 0 && s_trails[tk].len >= 2) {
+            const PlaneTrail &tr = s_trails[tk];
+            float sc = (float)radiusPx / (float)range;
+            lv_draw_line_dsc_t trl; lv_draw_line_dsc_init(&trl);
+            trl.width = 2; trl.round_start = 1; trl.round_end = 1;
+            trl.color = lv_color_hex(0x35708f);
+            for (int p = 1; p < tr.len; p++) {
+                lv_point_t tp[2] = {
+                    {(lv_coord_t)(cx + (int)lroundf(tr.xnm[p - 1] * sc)),
+                     (lv_coord_t)(cy - (int)lroundf(tr.ynm[p - 1] * sc))},
+                    {(lv_coord_t)(cx + (int)lroundf(tr.xnm[p]     * sc)),
+                     (lv_coord_t)(cy - (int)lroundf(tr.ynm[p]     * sc))}
+                };
+                trl.opa = (lv_opa_t)(40 + (215 * p) / (tr.len - 1));
+                lv_canvas_draw_line(cv, tp, 2, &trl);
+            }
+        }
+
         int trk = s_flightRows[i].track;
         if (trk >= 0) {
             float th = trk * DEG2RAD;
             float fx = sinf(th), fy = -cosf(th);   // heading forward vector (north up)
             float gx = -fy,      gy = fx;          // perpendicular (right of heading)
+
+            // Leader line: project ~2 min ahead at current ground speed.
+            int gs = s_flightRows[i].gs;
+            if (gs > 0) {
+                float leadPx = (gs / 60.0f * 2.0f) / (float)range * (float)radiusPx;
+                if (leadPx > radiusPx) leadPx = radiusPx;
+                if (leadPx > 4.0f) {
+                    lv_point_t lp[2] = {
+                        {(lv_coord_t)px, (lv_coord_t)py},
+                        {(lv_coord_t)(px + (int)lroundf(fx * leadPx)),
+                         (lv_coord_t)(py + (int)lroundf(fy * leadPx))}
+                    };
+                    lv_canvas_draw_line(cv, lp, 2, &lead);
+                }
+            }
+
             lv_point_t tri[3] = {
                 {(lv_coord_t)(px + lroundf(fx * 9)),                   (lv_coord_t)(py + lroundf(fy * 9))},
                 {(lv_coord_t)(px - lroundf(fx * 6) + lroundf(gx * 5)), (lv_coord_t)(py - lroundf(fy * 6) + lroundf(gy * 5))},
@@ -1276,6 +2498,43 @@ void ui_flights_set(FlightRow *rows, int count) {
     s_flightCount = count;
     for (int i = 0; i < count; i++) s_flightRows[i] = rows[i];
 
+    // Record flown-path history in zoom-independent NM coords, keyed by identity.
+    s_trailPoll++;
+    for (int i = 0; i < count; i++) {
+        String id = flight_id(rows[i]);
+        if (!id.length()) continue;
+        float br = rows[i].bearing * DEG2RAD;
+        float xn = rows[i].distNm * sinf(br);
+        float yn = rows[i].distNm * cosf(br);
+        int k = trail_find(id);
+        if (k < 0) {
+            for (int j = 0; j < UI_MAX_FLIGHTS && k < 0; j++)
+                if (!s_trails[j].used) k = j;
+            if (k < 0) {                       // evict least-recently-seen slot
+                k = 0; uint32_t oldest = s_trails[0].lastSeen;
+                for (int j = 1; j < UI_MAX_FLIGHTS; j++)
+                    if (s_trails[j].lastSeen < oldest) { oldest = s_trails[j].lastSeen; k = j; }
+            }
+            s_trails[k].used = true; s_trails[k].id = id; s_trails[k].len = 0;
+        }
+        PlaneTrail &tr = s_trails[k];
+        bool moved = tr.len == 0 ||
+                     fabsf(xn - tr.xnm[tr.len - 1]) > 0.05f ||
+                     fabsf(yn - tr.ynm[tr.len - 1]) > 0.05f;
+        if (moved) {
+            if (tr.len >= TRAIL_N) {
+                for (int p = 1; p < TRAIL_N; p++) { tr.xnm[p - 1] = tr.xnm[p]; tr.ynm[p - 1] = tr.ynm[p]; }
+                tr.len = TRAIL_N - 1;
+            }
+            tr.xnm[tr.len] = xn; tr.ynm[tr.len] = yn; tr.len++;
+        }
+        tr.lastSeen = s_trailPoll;
+    }
+    for (int j = 0; j < UI_MAX_FLIGHTS; j++)    // drop trails for departed aircraft
+        if (s_trails[j].used && s_trails[j].lastSeen != s_trailPoll) {
+            s_trails[j].used = false; s_trails[j].id = "";
+        }
+
     if (s_flightsTable) {
         lv_table_set_row_cnt(s_flightsTable, count + 1);
         for (int i = 0; i < count; i++) {
@@ -1294,12 +2553,25 @@ void ui_flights_set(FlightRow *rows, int count) {
 
     char st[64];
     snprintf(st, sizeof(st), "%d aircraft nearby   data: adsb.fi", count);
-    if (s_flightsStatus) lv_label_set_text(s_flightsStatus, st);
+    if (s_flightsStatus) {
+        lv_label_set_text(s_flightsStatus, st);
+        lv_obj_set_style_text_color(s_flightsStatus, lv_color_hex(0x8b97b0), 0);
+    }
+    s_flightsHave = true;                              // enable offline last-good (#1)
 
     draw_radar();
+    update_flight_hero();
 }
 
 void ui_flights_error(const String &msg) {
+    if (s_flightsHave) {                               // keep radar/table; just flag staleness (#1)
+        if (s_flightsStatus) {
+            char st[80]; snprintf(st, sizeof(st), "%s  (offline - last update)", msg.c_str());
+            lv_label_set_text(s_flightsStatus, st);
+            lv_obj_set_style_text_color(s_flightsStatus, lv_color_hex(0xffb454), 0);
+        }
+        return;
+    }
     if (s_flightsStatus) lv_label_set_text(s_flightsStatus, msg.c_str());
 }
 
@@ -1368,48 +2640,33 @@ void ui_tickers_error(const String &msg) {
 
 void ui_calendar_set(CalEvent *events, int count) {
     if (!s_calList) return;
-    if (count > UI_MAX_EVENTS) count = UI_MAX_EVENTS;
-    static const char *WD[7] = {"Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"};
-    bool h24 = settings().use24hClock;
-
-    for (int i = 0; i < UI_MAX_EVENTS; i++) {
-        if (!s_calRow[i]) continue;
-        if (i >= count) { lv_obj_add_flag(s_calRow[i], LV_OBJ_FLAG_HIDDEN); continue; }
-        lv_obj_clear_flag(s_calRow[i], LV_OBJ_FLAG_HIDDEN);
-
-        time_t t = (time_t)events[i].start;
-        struct tm tm; localtime_r(&t, &tm);
-        int wd = tm.tm_wday; if (wd < 0 || wd > 6) wd = 0;
-        char when[40];
-        if (events[i].allDay) {
-            snprintf(when, sizeof(when), "%s %d/%d\nAll day", WD[wd], tm.tm_mon + 1, tm.tm_mday);
-        } else if (h24) {
-            snprintf(when, sizeof(when), "%s %d/%d\n%02d:%02d",
-                     WD[wd], tm.tm_mon + 1, tm.tm_mday, tm.tm_hour, tm.tm_min);
-        } else {
-            int h12 = tm.tm_hour % 12; if (h12 == 0) h12 = 12;
-            snprintf(when, sizeof(when), "%s %d/%d\n%d:%02d %s",
-                     WD[wd], tm.tm_mon + 1, tm.tm_mday, h12, tm.tm_min,
-                     tm.tm_hour < 12 ? "AM" : "PM");
-        }
-        lv_label_set_text(s_calWhen[i], when);
-        lv_label_set_text(s_calTitle[i],
-            events[i].title.length() ? events[i].title.c_str() : "(no title)");
-    }
-
-    char st[48];
-    snprintf(st, sizeof(st), "%d upcoming event%s", count, count == 1 ? "" : "s");
-    lv_label_set_text(s_calStatus, st);
+    if (count > CAL_CACHE_N) count = CAL_CACHE_N;
+    s_calAllCount = count;
+    for (int i = 0; i < count; i++) s_calAll[i] = events[i];
+    if (s_calCard) lv_obj_add_flag(s_calCard, LV_OBJ_FLAG_HIDDEN);   // avoid a stale popup
+    cal_render();
 }
 
 void ui_calendar_error(const String &msg) {
     for (int i = 0; i < UI_MAX_EVENTS; i++)
         if (s_calRow[i]) lv_obj_add_flag(s_calRow[i], LV_OBJ_FLAG_HIDDEN);
-    if (s_calStatus) lv_label_set_text(s_calStatus, msg.c_str());
+    s_calAllCount = 0;
+    if (s_calHero) lv_obj_add_flag(s_calHero, LV_OBJ_FLAG_HIDDEN);
+    if (s_calGrid) lv_obj_add_flag(s_calGrid, LV_OBJ_FLAG_HIDDEN);
+    for (int i = 0; i < 7; i++) if (s_calDow[i]) lv_obj_add_flag(s_calDow[i], LV_OBJ_FLAG_HIDDEN);
+    if (s_calNav) lv_obj_add_flag(s_calNav, LV_OBJ_FLAG_HIDDEN);
+    if (s_calCard) lv_obj_add_flag(s_calCard, LV_OBJ_FLAG_HIDDEN);
+    if (s_calStatus) { lv_obj_clear_flag(s_calStatus, LV_OBJ_FLAG_HIDDEN);
+                       lv_label_set_text(s_calStatus, msg.c_str()); }
 }
 
 void ui_air_set(int usAqi, float pm25, float pm10, float o3, float no2) {
     int band = aqi_band(usAqi);
+    if (s_airAqiArc) {
+        int v = usAqi; if (v < 0) v = 0; if (v > 300) v = 300;
+        lv_arc_set_value(s_airAqiArc, v);
+        lv_obj_set_style_arc_color(s_airAqiArc, lv_color_hex(AQI_COLORS[band]), LV_PART_INDICATOR);
+    }
     if (s_airAqi) {
         char a[8]; snprintf(a, sizeof(a), "%d", usAqi);
         lv_label_set_text(s_airAqi, a);
@@ -1431,31 +2688,40 @@ void ui_air_set(int usAqi, float pm25, float pm10, float o3, float no2) {
         else snprintf(st, sizeof(st), "%.3f, %.3f   data: Open-Meteo",
                       settings().homeLat, settings().homeLon);
         lv_label_set_text(s_airStatus, st);
+        lv_obj_set_style_text_color(s_airStatus, lv_color_hex(0x8b97b0), 0);
     }
+    s_airHave = true;                                  // enable offline last-good (#1)
 }
 
 void ui_air_error(const String &msg) {
+    if (s_airHave) {                                   // keep gauges/values; flag staleness (#1)
+        if (s_airStatus) {
+            char st[80]; snprintf(st, sizeof(st), "%s  (offline - last update)", msg.c_str());
+            lv_label_set_text(s_airStatus, st);
+            lv_obj_set_style_text_color(s_airStatus, lv_color_hex(0xffb454), 0);
+        }
+        return;
+    }
     if (s_airStatus) lv_label_set_text(s_airStatus, msg.c_str());
 }
 
-void ui_air_motion(bool motion) {
-    if (!s_airMotion) return;
-    lv_label_set_text(s_airMotion, motion ? "Motion: detected" : "Motion: none");
-    lv_obj_set_style_text_color(s_airMotion,
-        lv_color_hex(motion ? 0x36d399 : 0x8b97b0), 0);
-}
-
 void ui_air_uv_set(float uvIndex) {
-    if (!s_airUv) return;
     uint32_t col;
     if      (uvIndex < 3)  col = 0x00e400;   // low
     else if (uvIndex < 6)  col = 0xffff00;   // moderate
     else if (uvIndex < 8)  col = 0xff7e00;   // high
     else if (uvIndex < 11) col = 0xff0000;   // very high
     else                   col = 0x8f3f97;   // extreme
-    char b[8]; snprintf(b, sizeof(b), "%.0f", uvIndex);
-    lv_label_set_text(s_airUv, b);
-    lv_obj_set_style_text_color(s_airUv, lv_color_hex(col), 0);
+    if (s_airUvArc) {
+        int v = (int)lroundf(uvIndex); if (v < 0) v = 0; if (v > 12) v = 12;
+        lv_arc_set_value(s_airUvArc, v);
+        lv_obj_set_style_arc_color(s_airUvArc, lv_color_hex(col), LV_PART_INDICATOR);
+    }
+    if (s_airUv) {
+        char b[8]; snprintf(b, sizeof(b), "%.0f", uvIndex);
+        lv_label_set_text(s_airUv, b);
+        lv_obj_set_style_text_color(s_airUv, lv_color_hex(col), 0);
+    }
 }
 
 // Format minutes-since-midnight as a clock string honoring the 12/24h setting.
@@ -1473,6 +2739,8 @@ static const char *MOON_NAMES[8] = {
     "Full", "Waning Gibbous", "Last Quarter", "Waning Crescent" };
 
 void ui_sun_set(int sunriseMin, int sunsetMin, int moonIdx, int illumPct) {
+    s_srMin = sunriseMin; s_ssMin = sunsetMin;
+    draw_sky(sky_now_min());
     if (s_sunLabel) {
         char sr[12], ss[12], b[48];
         fmt_hm(sunriseMin, sr, sizeof(sr));

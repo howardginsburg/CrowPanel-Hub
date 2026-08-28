@@ -23,9 +23,6 @@ void setup() {
 
     settings_load();
 
-    // Grove PIR on the digital header (screen wake/dim).
-    pinMode(PIN_GPIO_D, INPUT);
-
     touch_init();
     display_init();
     display_set_brightness(settings().brightness);

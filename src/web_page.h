@@ -79,7 +79,6 @@ static const char CONFIG_PAGE[] PROGMEM = R"HTML(<!DOCTYPE html>
       <input id="pollSeconds" type="number" min="20" max="3600">
       <div class="chk"><input id="useMetric" type="checkbox"><label style="margin:0">Metric units</label></div>
       <div class="chk"><input id="use24hClock" type="checkbox"><label style="margin:0">24-hour clock</label></div>
-      <div class="chk"><input id="pirDimEnabled" type="checkbox"><label style="margin:0">Dim screen when no motion (PIR)</label></div>
     </fieldset>
 
     <fieldset>
@@ -98,7 +97,7 @@ static const char CONFIG_PAGE[] PROGMEM = R"HTML(<!DOCTYPE html>
 const $ = id => document.getElementById(id);
 const fields = ["wifiSsid","locationName","homeLat","homeLon","radarRangeNm","icsUrl",
   "tickers","pollSeconds","brightness","configPin"];
-const bools  = ["useMetric","use24hClock","pirDimEnabled"];
+const bools  = ["useMetric","use24hClock"];
 
 async function load() {
   const r = await fetch('/api/config'); const c = await r.json();
