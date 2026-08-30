@@ -1,14 +1,16 @@
-// ui.h — LVGL sidebar-nav shell and the seven dashboard pages.
+// ui.h — LVGL launcher shell, top bar, and the full-screen dashboard panels.
 #pragma once
 #include <Arduino.h>
 
-// Page indices (left sidebar order).
+// Page indices. PAGE_LAUNCHER is the tile grid; the rest are full-screen panels.
 enum Page {
-    PAGE_HOME = 0,
+    PAGE_LAUNCHER = 0,
+    PAGE_WEATHER,
     PAGE_FLIGHTS,
     PAGE_CALENDAR,
     PAGE_TICKERS,
     PAGE_AIR,
+    PAGE_PHOTO,
     PAGE_DIAG,
     PAGE_CONFIG,
     PAGE_COUNT
@@ -75,3 +77,8 @@ void ui_sun_set(int sunriseMin, int sunsetMin, int moonIdx, int illumPct);
 #define UI_HOURLY_N 12
 struct HourCell { int hour; float tempC; int precipPct; };
 void ui_hourly_set(HourCell *cells, int count);
+
+// ---- Photo frame ----
+// Called by the data layer after a fetch: repaints the canvas on success, or
+// shows the status text (from photo_status()) on failure.
+void ui_photo_refresh(bool ok, const char *status);

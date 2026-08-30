@@ -2,13 +2,13 @@
 
 A touchscreen desk dashboard for the **Elecrow CrowPanel ESP32 HMI 5.0"** display,
 built with **PlatformIO + LVGL**. It shows the time, local weather, **live aircraft
-flying nearby (with tail numbers)**, your calendar, market tickers, and air/environment
-readings — all configured from a phone or laptop through a built-in web page (no code
-edits, no re-flashing to change settings).
+flying nearby (with tail numbers)**, your calendar, market tickers, air/environment
+readings, and a rotating **photo frame** of nature shots — all configured from a phone or
+laptop through a built-in web page (no code edits, no re-flashing to change settings).
 
 > **Status:** working prototype. Board bring-up (display, touch, LVGL shell), Wi-Fi
 > provisioning, the web config portal, and every data tab — clock/weather, flights radar,
-> calendar, tickers, and air/UV — are implemented.
+> calendar, tickers, air/UV, and the photo frame — are implemented.
 
 > 🛠️ **All the technical detail** — pin map, display driver, module design, data flow,
 > build config — lives in **[architecture.md](architecture.md)**. This README is the
@@ -49,6 +49,7 @@ A left-sidebar, multi-page LVGL dashboard:
 | **Calendar** | Upcoming events | your `.ics` feed |
 | **Tickers** | Stock / crypto prices with sparklines | Yahoo Finance |
 | **Air** | US air-quality index + UV | Open-Meteo |
+| **Photo** | Full-screen nature photo frame, auto-rotating (default 60 s) | LoremFlickr (or any JPEG URL) |
 | **Diag** | Uptime, heap/PSRAM, Wi-Fi, reset reason, firmware | on-device |
 | **Config** | Where to configure the device (URL + QR) | — |
 
@@ -93,8 +94,10 @@ On first boot the screen shows the **Config** tab with setup instructions — jo
 - Flight data: **[adsb.fi](https://adsb.fi/)** (credit required, non-commercial)
 - Weather / air / UV: **[Open-Meteo](https://open-meteo.com/)**
 - Tickers: **Yahoo Finance** chart API
+- Photo frame: **[LoremFlickr](https://loremflickr.com/)** (default source; any JPEG URL works)
 - **[LVGL](https://lvgl.io/)**, **[ArduinoJson](https://arduinojson.org/)**,
   **[ESPAsyncWebServer](https://github.com/mathieucarbou/ESPAsyncWebServer)**,
+  **[JPEGDEC](https://github.com/bitbank2/JPEGDEC)**,
   **[pioarduino](https://github.com/pioarduino/platform-espressif32)** (Arduino-ESP32 / ESP-IDF)
 
 License: MIT (add a `LICENSE` file to confirm).

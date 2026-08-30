@@ -4,6 +4,7 @@
 #include "settings.h"
 #include "net_wifi.h"
 #include "board_pins.h"
+#include "photo.h"
 #include <Arduino.h>
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
@@ -846,17 +847,27 @@ static void poll_calendar() {
     s_calHadGood = true;
 }
 
+// -------------------------------------------------------------------- photo ---
+// Download + decode the next nature photo into the shared PSRAM framebuffer,
+// then tell the UI to repaint (or show the error status).
+static void poll_photo() {
+    bool ok = photo_fetch();
+    ui_photo_refresh(ok, photo_status());
+}
+
 // --------------------------------------------------------------------- tick ---
 // ----------------------------------------------------------------- tick ---
 // One poller per tab. Only the focused tab's source is refreshed; DIAG/CONFIG
 // have none. Switching tabs forces an immediate sync (see lastMs = 0 below).
 struct PagePoll { void (*poll)(); uint32_t lastMs; };
 static PagePoll s_poll[PAGE_COUNT] = {
-    /* HOME     */ { poll_weather,  0 },
+    /* LAUNCHER */ { nullptr,       0 },
+    /* WEATHER  */ { poll_weather,  0 },
     /* FLIGHTS  */ { poll_flights,  0 },
     /* CALENDAR */ { poll_calendar, 0 },
     /* TICKERS  */ { poll_tickers,  0 },
     /* AIR      */ { poll_air,      0 },
+    /* PHOTO    */ { poll_photo,    0 },
     /* DIAG     */ { nullptr,       0 },
     /* CONFIG   */ { nullptr,       0 },
 };
@@ -904,6 +915,7 @@ void data_tick() {
 
     uint32_t interval = (uint32_t)settings().pollSeconds * 1000UL;
     if (active == PAGE_FLIGHTS && interval > 10000UL) interval = 10000UL;   // live radar refreshes faster
+    if (active == PAGE_PHOTO) interval = (uint32_t)settings().photoSeconds * 1000UL;   // photo rotate cadence
     if (pp.lastMs == 0 || millis() - pp.lastMs >= interval) {
         pp.poll();
         pp.lastMs = millis();   // count the cadence from completion, so a slow

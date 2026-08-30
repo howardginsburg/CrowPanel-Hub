@@ -21,6 +21,10 @@ struct Settings {
     bool     useMetric;        // units: metric vs imperial
     bool     use24hClock;
 
+    // Photo frame
+    String   photoUrl;         // JPEG source (blank = built-in nature default)
+    uint16_t photoSeconds;     // rotate cadence (>= 10s)
+
     // Device
     uint8_t  brightness;       // 0..255
     uint16_t pollSeconds;      // data refresh cadence
@@ -28,6 +32,7 @@ struct Settings {
     // On-device view state (not exposed in the web portal)
     uint8_t  tickerTf;         // Ticker timeframe index (0=1D .. 4=1Y)
     uint8_t  calView;          // Calendar view (0=List,1=Day,2=Week,3=Month)
+    uint8_t  lastPanel;        // Last-selected panel (Page index) to restore on boot
 
     // Web portal PIN gate (empty = disabled)
     String   configPin;
@@ -42,6 +47,7 @@ void settings_save();
 // Persist a single on-device view preference (cheap NVS write, no full save).
 void settings_set_ticker_tf(uint8_t idx);
 void settings_set_cal_view(uint8_t view);
+void settings_set_last_panel(uint8_t panel);
 
 // Access the live settings instance.
 Settings &settings();

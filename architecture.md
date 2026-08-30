@@ -92,6 +92,7 @@ I²C addresses: GT911 `0x5D` (alt `0x14`), PCA9557 `0x18`.
 | DNSServer / ESPmDNS | captive portal / `crowpanel.local` | Zero-config access |
 | Preferences (NVS) | settings storage | Survives reboot and re-flash |
 | QRCode | on-screen QR | Config tab link to the web UI |
+| JPEGDEC | photo-frame decode | Decodes downloaded JPEGs to RGB565 in PSRAM ([src/photo.cpp](src/photo.cpp)) |
 
 **Key `platformio.ini` settings:** `board_build.arduino.memory_type = qio_opi` (Octal
 PSRAM), `board_build.partitions = huge_app.csv` (3 MB app on 4 MB flash),
@@ -276,7 +277,7 @@ any raw-RGB panel stable.
 The UI is a fixed set of pages indexed by the `Page` enum in [src/ui.h](src/ui.h):
 
 ```
-PAGE_HOME, PAGE_FLIGHTS, PAGE_CALENDAR, PAGE_TICKERS, PAGE_AIR, PAGE_DIAG, PAGE_CONFIG
+PAGE_HOME, PAGE_FLIGHTS, PAGE_CALENDAR, PAGE_TICKERS, PAGE_AIR, PAGE_PHOTO, PAGE_DIAG, PAGE_CONFIG
 ```
 
 `ui_show_page()` sets the visible page; `ui_active_page()` reports it so the data layer
@@ -303,7 +304,8 @@ static PagePoll s_poll[PAGE_COUNT] = { {poll_weather,0}, {poll_flights,0}, ... }
    the poll returns, so a slow fetch can't immediately re-trigger itself.
 
 Cadence is `settings().pollSeconds` (default 60 s), except **Flights is capped at 10 s**
-for a live radar, and **Calendar** uses its own 15-minute gate (`poll_calendar_gate`) that
+for a live radar, **Photo** uses its own `settings().photoSeconds` rotate interval (default
+60 s, min 10 s), and **Calendar** uses its own 15-minute gate (`poll_calendar_gate`) that
 also reacts to a changed `.ics` URL. `DIAG`/`CONFIG` have no poller.
 
 ```mermaid
@@ -332,9 +334,10 @@ sequenceDiagram
 The data layer never touches LVGL objects directly; it calls typed **push hooks** declared
 in [src/ui.h](src/ui.h), e.g. `ui_weather_set()`, `ui_forecast_set(DayForecast*)`,
 `ui_flights_set(FlightRow*)`, `ui_tickers_set(TickerRow*)`, `ui_calendar_set(CalEvent*)`,
-`ui_air_set()`, `ui_air_uv_set()`, `ui_sun_set()`, `ui_hourly_set(HourCell*)`, plus an
-`ui_*_error()` for each. This keeps parsing (data.cpp) and rendering (ui.cpp) decoupled and
-gives each feed a small, explicit contract (the row/cell structs).
+`ui_air_set()`, `ui_air_uv_set()`, `ui_sun_set()`, `ui_hourly_set(HourCell*)`, and
+`ui_photo_refresh(ok, status)`, plus an `ui_*_error()` for each. This keeps parsing
+(data.cpp) and rendering (ui.cpp) decoupled and gives each feed a small, explicit contract
+(the row/cell structs).
 
 ### 6.4 Data sources & APIs
 
@@ -346,6 +349,7 @@ All feeds are **keyless** and fetched over HTTPS (`WiFiClientSecure::setInsecure
 | Flights | adsb.fi (`opendata.adsb.fi/api/v3/lat/{lat}/lon/{lon}/dist/{NM}`, ≤ 250 NM) | **Credit required**, non-commercial, ~1 req/sec |
 | Tickers | Yahoo Finance chart API (`query1.finance.yahoo.com/v8/finance/chart/{sym}`) | Needs a `User-Agent` header or it 403s |
 | Calendar | user-supplied public `.ics` URL | Streamed, not buffered into JSON |
+| Photo | LoremFlickr (`loremflickr.com/800/436/nature`) or any user-supplied JPEG URL | Follows redirects; binary JPEG, decoded with JPEGDEC |
 
 adsb.fi fields used: `r` (registration / tail #, falls back to the `flight` callsign), `t`
 (type), `alt_baro`, `lat`, `lon`. The Flights tab shows a small "data: adsb.fi" credit as
@@ -384,14 +388,26 @@ driver. `pca9557_reset_gt911()` pulses the reset line via the PCA9557 expander o
 that need it. The GT911 self-initialises at power-on, so this module only reads points.
 
 ### `ui.cpp` / `ui.h` — the LVGL shell and pages *(largest module)*
-Builds the sidebar nav and all seven pages (`build_home`, `build_flights`, …), exposes
-`ui_show_page()` / `ui_active_page()`, runs `ui_tick()` housekeeping (clock text, live
-Diag/Config values, net-state page switching), and implements every `ui_*_set()` push hook.
+Builds the sidebar nav and all pages (`build_home`, `build_flights`, …, `build_photo`),
+exposes `ui_show_page()` / `ui_active_page()`, runs `ui_tick()` housekeeping (clock text,
+live Diag/Config values, net-state page switching), and implements every `ui_*_set()` push
+hook.
 
 - **Flights radar** is drawn on a 400×400 PSRAM canvas. Range rings are plotted point-by-
   point via the `canvas_ring()` helper using `lv_canvas_set_px_color`. **`lv_canvas_draw_arc`
   is deliberately avoided** — full-circle arcs hang at larger radii under LVGL 8.3 (see §8).
+- The **Photo** page is a full-bleed 800×436 `lv_canvas` bound to the shared PSRAM RGB565
+  framebuffer that `photo.cpp` decodes into; `ui_photo_refresh()` invalidates the canvas or
+  shows the status/error text.
 - The Config-tab QR code and ticker sparklines are also LVGL canvases.
+
+### `photo.cpp` / `photo.h` — network photo frame
+Downloads a JPEG over HTTPS into a 512 KB PSRAM scratch buffer, then decodes it with
+**JPEGDEC** directly into a PSRAM RGB565 framebuffer (800×436) that the UI binds to a
+canvas. The image is power-of-two downscaled to fit and centred (smaller images get a
+black border, larger ones are clipped). `photo_fetch()` follows redirects and leaves the
+previous photo on screen if a fetch fails. Pixel byte order is `RGB565_LITTLE_ENDIAN` to
+match `LV_COLOR_16_SWAP=0`.
 
 ### `data.cpp` / `data.h` — network data services
 NTP time plus all HTTPS JSON polling behind the per-tab descriptor table (§6.2).
@@ -433,10 +449,10 @@ An optional PIN gates config access. On save it raises the flag that
 `web_portal_consume_wifi_changed()` returns to the main loop.
 
 ### `settings.cpp` / `settings.h` — persistent config
-The `Settings` struct (14 fields) is the single source of truth. `settings_load()` /
+The `Settings` struct (16 fields) is the single source of truth. `settings_load()` /
 `settings_save()` map each field to an NVS key via the `Preferences` library (keys are
-abbreviated, e.g. `useMetric`→`"metric"`, `use24hClock`→`"clk24"`), and JSON import/export
-back the portal's config API. `settings()` returns the live instance.
+abbreviated, e.g. `useMetric`→`"metric"`, `use24hClock`→`"clk24"`, `photoSeconds`→`"photoSec"`),
+and JSON import/export back the portal's config API. `settings()` returns the live instance.
 
 ### `lv_conf.h` — LVGL build configuration
 Compile-time LVGL options (enabled fonts, color depth RGB565, feature flags) for this
@@ -478,6 +494,7 @@ panel.
 | [src/display.cpp](src/display.cpp) / [.h](src/display.h) | esp_lcd RGB panel + LVGL + tear-free flush |
 | [src/touch_gt911.cpp](src/touch_gt911.cpp) / [.h](src/touch_gt911.h) | GT911 reader + PCA9557 reset |
 | [src/ui.cpp](src/ui.cpp) / [.h](src/ui.h) | Sidebar nav, pages, push hooks, radar canvas |
+| [src/photo.cpp](src/photo.cpp) / [.h](src/photo.h) | Photo frame: HTTPS JPEG download + JPEGDEC decode |
 | [src/data.cpp](src/data.cpp) / [.h](src/data.h) | NTP, per-tab HTTPS pollers, parsers |
 | [src/net_wifi.cpp](src/net_wifi.cpp) / [.h](src/net_wifi.h) | Wi-Fi state machine + provisioning |
 | [src/web_portal.cpp](src/web_portal.cpp) / [.h](src/web_portal.h) | Async config server + captive portal |

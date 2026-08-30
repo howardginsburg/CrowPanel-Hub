@@ -4,6 +4,7 @@
 #include "net_wifi.h"
 #include "display.h"
 #include "data.h"
+#include "photo.h"
 #include <lvgl.h>
 #include <qrcode.h>
 #include <time.h>
@@ -17,12 +18,18 @@
 // ---------------------------------------------------------------------------
 // Layout constants
 // ---------------------------------------------------------------------------
-static const int SIDEBAR_W = 150;
-static const int RADAR_PX  = 400;
+static const int TOPBAR_H  = 44;                     // always-visible top bar (hosts the clock)
+#define PAGE_H (LV_VER_RES - TOPBAR_H)               // usable panel height below the top bar
+static const int SIDEBAR_W = 0;                      // legacy width offset (no sidebar now; full width)
+static const int RADAR_PX  = 368;   // fits the 400px content height below the status row
 
 static lv_obj_t *s_pages[PAGE_COUNT];
-static lv_obj_t *s_navBtns[PAGE_COUNT];
-static Page      s_active = PAGE_HOME;
+static lv_obj_t *s_topbar;
+static lv_obj_t *s_topbarBack;
+static lv_obj_t *s_topbarTitle;
+static lv_obj_t *s_topWifi;                          // Wi-Fi signal bars (top bar)
+static lv_obj_t *s_topWifiBar[4];
+static Page      s_active = PAGE_LAUNCHER;
 
 // Widgets we update at runtime
 static lv_obj_t *s_clockTime;
@@ -148,8 +155,8 @@ static lv_obj_t *s_diagFlashBar, *s_diagFlashVal;     // flash/sketch usage bar 
 static lv_obj_t *s_diagSigBar[4];                     // Wi-Fi signal strength bars (Diag)
 static lv_obj_t *s_diagSigTxt;                        // signal quality label (Diag)
 #define DIAG_N 120                                    // 120 samples @ 500ms = 60s window
-#define DSP_W  300
-#define DSP_H  64
+#define DSP_W  400
+#define DSP_H  56
 static float s_heapHist[DIAG_N];
 static float s_rssiHist[DIAG_N];
 static float s_tempHist[DIAG_N];                      // SoC die temperature (deg F)
@@ -164,30 +171,35 @@ static lv_obj_t *s_cfgState;
 static lv_obj_t *s_cfgDetails;
 static lv_obj_t *s_cfgQr;
 
+// Photo frame
+static lv_obj_t *s_photoCanvas;
+static lv_obj_t *s_photoStatus;
+
 static const char *PAGE_TITLES[PAGE_COUNT] = {
-    "Home", "Flights", "Calendar", "Tickers", "Air", "Diag", "Config"
+    "Home", "Weather", "Flights", "Calendar", "Tickers", "Air", "Photo", "Diag", "Config"
 };
 static const char *PAGE_ICONS[PAGE_COUNT] = {
-    LV_SYMBOL_HOME, LV_SYMBOL_UP, LV_SYMBOL_LIST,
-    LV_SYMBOL_CHARGE, LV_SYMBOL_EYE_OPEN, LV_SYMBOL_DRIVE, LV_SYMBOL_SETTINGS
+    LV_SYMBOL_HOME, LV_SYMBOL_HOME, LV_SYMBOL_UP, LV_SYMBOL_LIST,
+    LV_SYMBOL_CHARGE, LV_SYMBOL_EYE_OPEN, LV_SYMBOL_IMAGE, LV_SYMBOL_DRIVE, LV_SYMBOL_SETTINGS
 };
 
 // ---------------------------------------------------------------------------
 // Navigation
 // ---------------------------------------------------------------------------
-static void nav_event_cb(lv_event_t *e) {
-    Page p = (Page)(intptr_t)lv_event_get_user_data(e);
-    ui_show_page(p);
-}
 void ui_show_page(Page p) {
     if (p < 0 || p >= PAGE_COUNT) return;
     for (int i = 0; i < PAGE_COUNT; i++) {
         if (i == p) lv_obj_clear_flag(s_pages[i], LV_OBJ_FLAG_HIDDEN);
         else        lv_obj_add_flag(s_pages[i], LV_OBJ_FLAG_HIDDEN);
-        if (i == p) lv_obj_add_state(s_navBtns[i], LV_STATE_CHECKED);
-        else        lv_obj_clear_state(s_navBtns[i], LV_STATE_CHECKED);
     }
+    bool launcher = (p == PAGE_LAUNCHER);
+    if (s_topbarBack) {
+        if (launcher) lv_obj_add_flag(s_topbarBack, LV_OBJ_FLAG_HIDDEN);
+        else          lv_obj_clear_flag(s_topbarBack, LV_OBJ_FLAG_HIDDEN);
+    }
+    if (s_topbarTitle) lv_label_set_text(s_topbarTitle, PAGE_TITLES[p]);
     s_active = p;
+    if (!launcher) settings_set_last_panel((uint8_t)p);
 }
 
 Page ui_active_page() { return s_active; }
@@ -197,8 +209,8 @@ Page ui_active_page() { return s_active; }
 // ---------------------------------------------------------------------------
 static lv_obj_t *make_page(lv_obj_t *parent) {
     lv_obj_t *pg = lv_obj_create(parent);
-    lv_obj_set_size(pg, LV_HOR_RES - SIDEBAR_W, LV_VER_RES);
-    lv_obj_set_pos(pg, SIDEBAR_W, 0);
+    lv_obj_set_size(pg, LV_HOR_RES, PAGE_H);
+    lv_obj_set_pos(pg, 0, TOPBAR_H);
     lv_obj_set_style_border_width(pg, 0, 0);
     lv_obj_set_style_radius(pg, 0, 0);
     lv_obj_set_style_bg_color(pg, lv_color_hex(0x0f1420), 0);
@@ -334,8 +346,8 @@ static void wx_draw(lv_obj_t *cv, int cx, int cy, int s, int code, int phase = 0
 // ---------------------------------------------------------------------------
 
 // Day/night sky gradient behind the Home clock. -----------------------------
-#define SKY_W 340
-#define SKY_H 104
+#define SKY_W 480
+#define SKY_H 150
 static uint32_t sky_mix(uint32_t a, uint32_t b, float t) {
     int ar = (a >> 16) & 0xff, ag = (a >> 8) & 0xff, ab = a & 0xff;
     int br = (b >> 16) & 0xff, bg = (b >> 8) & 0xff, bb = b & 0xff;
@@ -350,8 +362,8 @@ static void sky_disc(int cx, int cy, int r, uint32_t col) {
     lv_canvas_draw_rect(s_skyCanvas, cx - r, cy - r, 2 * r, 2 * r, &d);
 }
 static void sky_stars() {
-    static const uint16_t SX[] = { 22, 60, 96, 140, 176, 212, 250, 292, 314, 46, 122, 202, 276 };
-    static const uint8_t  SY[] = { 18, 40, 12,  54,  24,  48,  16,  38,  58, 70,  78,  66,  74 };
+    static const uint16_t SX[] = { 22, 60, 96, 140, 176, 212, 250, 292, 314, 46, 122, 202, 276, 84, 160, 236, 300, 30, 336, 372, 410, 446, 356, 428 };
+    static const uint8_t  SY[] = { 18, 40, 12,  54,  24,  48,  16,  38,  58, 70,  96,  84, 104, 122, 132, 110, 66, 128,  30,  92,  50, 116, 132,  22 };
     lv_draw_rect_dsc_t s; lv_draw_rect_dsc_init(&s);
     s.bg_color = lv_color_hex(0xdfe6f5); s.bg_opa = LV_OPA_70; s.radius = LV_RADIUS_CIRCLE;
     for (unsigned k = 0; k < sizeof(SX) / sizeof(SX[0]); k++)
@@ -420,9 +432,9 @@ static void draw_sky(int nowMin) {
         lv_canvas_draw_line(s_skyCanvas, p, 2, &g);
     }
 
-    // Sun/moon travel an arc during the day; keep them right of the clock so the
-    // numbers stay clear (ax0..ax1 is the open band between clock and weather panel).
-    const int ax0 = 196, ax1 = SKY_W - 22, baseY = SKY_H - 14, arcH = SKY_H - 42;
+    // Sun/moon travel an arc across the full sky width (the clock moved to the
+    // top bar, so the whole canvas is free).
+    const int ax0 = 20, ax1 = SKY_W - 20, baseY = SKY_H - 14, arcH = SKY_H - 42;
     if (sr >= 0 && ss >= 0 && nowMin >= sr && nowMin <= ss && ss > sr) {
         float fr = (float)(nowMin - sr) / (ss - sr);
         int dx = ax0 + (int)lroundf(fr * (ax1 - ax0));
@@ -441,7 +453,8 @@ static void draw_sky(int nowMin) {
 }
 
 static void build_home(lv_obj_t *pg) {
-    // Day/night sky gradient sits behind the clock (created first = drawn under).
+    // Day/night sky gradient (top-left). The clock now lives in the global top bar,
+    // so the whole canvas is free for the sun/moon arc and starfield.
     static lv_color_t *skyBuf = nullptr;
     if (!skyBuf) skyBuf = (lv_color_t *)heap_caps_malloc(
         SKY_W * SKY_H * sizeof(lv_color_t), MALLOC_CAP_SPIRAM);
@@ -451,29 +464,6 @@ static void build_home(lv_obj_t *pg) {
     lv_obj_set_style_radius(s_skyCanvas, 10, 0);
     lv_obj_set_style_clip_corner(s_skyCanvas, true, 0);
     draw_sky(sky_now_min());
-
-    // Clock + date (top-left). Translucent plates keep text legible over a bright sky/sun.
-    s_clockTime = lv_label_create(pg);
-    lv_label_set_text(s_clockTime, "--:--");
-    lv_obj_set_style_text_font(s_clockTime, &lv_font_montserrat_48, 0);
-    lv_obj_set_style_text_color(s_clockTime, lv_color_hex(0xffffff), 0);
-    lv_obj_set_style_bg_color(s_clockTime, lv_color_hex(0x0a0e18), 0);
-    lv_obj_set_style_bg_opa(s_clockTime, LV_OPA_60, 0);
-    lv_obj_set_style_pad_hor(s_clockTime, 10, 0);
-    lv_obj_set_style_pad_ver(s_clockTime, 2, 0);
-    lv_obj_set_style_radius(s_clockTime, 10, 0);
-    lv_obj_align(s_clockTime, LV_ALIGN_TOP_LEFT, 0, 4);
-
-    s_clockDate = lv_label_create(pg);
-    lv_label_set_text(s_clockDate, "Waiting for time sync...");
-    lv_obj_set_style_text_font(s_clockDate, &lv_font_montserrat_20, 0);
-    lv_obj_set_style_text_color(s_clockDate, lv_color_hex(0xeaf0ff), 0);
-    lv_obj_set_style_bg_color(s_clockDate, lv_color_hex(0x0a0e18), 0);
-    lv_obj_set_style_bg_opa(s_clockDate, LV_OPA_50, 0);
-    lv_obj_set_style_pad_hor(s_clockDate, 8, 0);
-    lv_obj_set_style_pad_ver(s_clockDate, 2, 0);
-    lv_obj_set_style_radius(s_clockDate, 8, 0);
-    lv_obj_align(s_clockDate, LV_ALIGN_TOP_LEFT, 0, 62);
 
     // Current conditions (top-right): drawn icon + big temperature + details.
     static lv_color_t *wxBuf = nullptr;
@@ -509,7 +499,7 @@ static void build_home(lv_obj_t *pg) {
     const int CW    = LV_HOR_RES - SIDEBAR_W - 36;
     const int gap   = 8;
     const int cardW = (CW - gap * (UI_FORECAST_DAYS - 1)) / UI_FORECAST_DAYS;
-    const int cardH = 132;
+    const int cardH = 118;
     const int IC    = 56;
     static lv_color_t *fcBuf[UI_FORECAST_DAYS] = {nullptr};
     for (int i = 0; i < UI_FORECAST_DAYS; i++) {
@@ -546,21 +536,21 @@ static void build_home(lv_obj_t *pg) {
     // --- Sun/moon summary + hourly strip (middle band, above the 5-day cards) ---
     s_sunLabel = lv_label_create(pg);
     lv_label_set_text(s_sunLabel, "Sunrise --   Sunset --");
-    lv_obj_set_style_text_font(s_sunLabel, &lv_font_montserrat_16, 0);
+    lv_obj_set_style_text_font(s_sunLabel, &lv_font_montserrat_14, 0);
     lv_obj_set_style_text_color(s_sunLabel, lv_color_hex(0xcdd6ea), 0);
-    lv_obj_align(s_sunLabel, LV_ALIGN_TOP_LEFT, 0, 150);
+    lv_obj_align(s_sunLabel, LV_ALIGN_TOP_LEFT, 0, 154);
 
     s_moonLabel = lv_label_create(pg);
     lv_label_set_text(s_moonLabel, "Moon --");
-    lv_obj_set_style_text_font(s_moonLabel, &lv_font_montserrat_16, 0);
+    lv_obj_set_style_text_font(s_moonLabel, &lv_font_montserrat_14, 0);
     lv_obj_set_style_text_color(s_moonLabel, lv_color_hex(0x8b97b0), 0);
-    lv_obj_align(s_moonLabel, LV_ALIGN_TOP_LEFT, 0, 174);
+    lv_obj_align(s_moonLabel, LV_ALIGN_TOP_LEFT, 0, 176);
 
     const int CWh  = LV_HOR_RES - SIDEBAR_W - 36;
     const int hgap = 4;
     const int hcW  = (CWh - hgap * (UI_HOURLY_N - 1)) / UI_HOURLY_N;
-    const int hcH  = 84;
-    const int hcY  = 202;
+    const int hcH  = 80;
+    const int hcY  = 198;
     for (int i = 0; i < UI_HOURLY_N; i++) {
         lv_obj_t *c = lv_obj_create(pg);
         lv_obj_set_size(c, hcW, hcH);
@@ -848,7 +838,7 @@ static void build_flights(lv_obj_t *pg) {
     // Table (hidden until toggled).
     s_flightsTable = lv_table_create(pg);
     lv_obj_align(s_flightsTable, LV_ALIGN_TOP_LEFT, 0, 32);
-    lv_obj_set_size(s_flightsTable, LV_HOR_RES - SIDEBAR_W - 36, LV_VER_RES - 72);
+    lv_obj_set_size(s_flightsTable, LV_HOR_RES - SIDEBAR_W - 36, PAGE_H - 72);
     lv_table_set_col_cnt(s_flightsTable, 6);
     lv_table_set_row_cnt(s_flightsTable, 1);
     lv_table_set_cell_value(s_flightsTable, 0, 0, "#");
@@ -973,7 +963,7 @@ static void build_tickers(lv_obj_t *pg) {
 
     // Scrollable card list.
     s_tkList = lv_obj_create(pg);
-    lv_obj_set_size(s_tkList, CW, LV_VER_RES - 44);
+    lv_obj_set_size(s_tkList, CW, PAGE_H - 44);
     lv_obj_align(s_tkList, LV_ALIGN_TOP_LEFT, 0, 40);
     lv_obj_set_style_bg_opa(s_tkList, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(s_tkList, 0, 0);
@@ -1108,34 +1098,171 @@ static void render_qr(const String &text) {
 }
 
 // ---------------------------------------------------------------------------
-// Sidebar
+// Top bar + launcher
 // ---------------------------------------------------------------------------
-static void build_sidebar(lv_obj_t *scr) {
-    lv_obj_t *bar = lv_obj_create(scr);
-    lv_obj_set_size(bar, SIDEBAR_W, LV_VER_RES);
-    lv_obj_set_pos(bar, 0, 0);
-    lv_obj_set_style_bg_color(bar, lv_color_hex(0x161d2e), 0);
-    lv_obj_set_style_border_width(bar, 0, 0);
-    lv_obj_set_style_radius(bar, 0, 0);
-    lv_obj_set_style_pad_all(bar, 8, 0);
-    lv_obj_set_flex_flow(bar, LV_FLEX_FLOW_COLUMN);
-    lv_obj_clear_flag(bar, LV_OBJ_FLAG_SCROLLABLE);
+static void topbar_back_cb(lv_event_t *e) { ui_show_page(PAGE_LAUNCHER); }
 
-    for (int i = 0; i < PAGE_COUNT; i++) {
-        lv_obj_t *btn = lv_btn_create(bar);
-        lv_obj_set_width(btn, LV_PCT(100));
-        lv_obj_set_height(btn, 50);
-        lv_obj_set_style_bg_color(btn, lv_color_hex(0x161d2e), 0);
-        lv_obj_set_style_bg_color(btn, lv_color_hex(0x2f7bff), LV_STATE_CHECKED);
-        lv_obj_set_style_radius(btn, 8, 0);
-        lv_obj_add_event_cb(btn, nav_event_cb, LV_EVENT_CLICKED, (void *)(intptr_t)i);
+// Map an RSSI (dBm) to a 1-4 bar count + a quality color.
+static int rssi_to_bars(int rssi, uint32_t *col) {
+    if      (rssi >= -55) { *col = 0x39d98a; return 4; }
+    else if (rssi >= -65) { *col = 0x39d98a; return 3; }
+    else if (rssi >= -75) { *col = 0xffb347; return 2; }
+    else                  { *col = 0xff5c5c; return 1; }
+}
 
-        lv_obj_t *lbl = lv_label_create(btn);
-        lv_label_set_text_fmt(lbl, "%s  %s", PAGE_ICONS[i], PAGE_TITLES[i]);
-        lv_obj_set_style_text_font(lbl, &lv_font_montserrat_14, 0);
-        lv_obj_center(lbl);
+// Re-anchor the clock cluster right-to-left so the date never clips as its
+// width changes: [ date ][ time ][ wifi ] pinned to the right edge.
+static void topbar_relayout() {
+    if (!s_topWifi) return;
+    lv_obj_align(s_topWifi, LV_ALIGN_RIGHT_MID, -10, 0);
+    lv_obj_align_to(s_clockTime, s_topWifi, LV_ALIGN_OUT_LEFT_MID, -12, 0);
+    lv_obj_align_to(s_clockDate, s_clockTime, LV_ALIGN_OUT_LEFT_MID, -10, 0);
+}
 
-        s_navBtns[i] = btn;
+// Light the top-bar Wi-Fi bars per current signal (grey when offline).
+static void update_topbar_wifi() {
+    if (!s_topWifiBar[0]) return;
+    int bars = 0; uint32_t col = 0x8b97b0;
+    if (net_state() == NetState::Connected) bars = rssi_to_bars((int)WiFi.RSSI(), &col);
+    for (int i = 0; i < 4; i++)
+        lv_obj_set_style_bg_color(s_topWifiBar[i], lv_color_hex(i < bars ? col : 0x2a3550), 0);
+}
+
+// Always-visible top strip: back/home button + panel title (left), global clock (right).
+static void build_topbar(lv_obj_t *scr) {
+    s_topbar = lv_obj_create(scr);
+    lv_obj_set_size(s_topbar, LV_HOR_RES, TOPBAR_H);
+    lv_obj_set_pos(s_topbar, 0, 0);
+    lv_obj_set_style_bg_color(s_topbar, lv_color_hex(0x161d2e), 0);
+    lv_obj_set_style_border_width(s_topbar, 0, 0);
+    lv_obj_set_style_radius(s_topbar, 0, 0);
+    lv_obj_set_style_pad_all(s_topbar, 0, 0);
+    lv_obj_clear_flag(s_topbar, LV_OBJ_FLAG_SCROLLABLE);
+
+    s_topbarBack = lv_btn_create(s_topbar);
+    lv_obj_set_size(s_topbarBack, 58, TOPBAR_H - 10);
+    lv_obj_align(s_topbarBack, LV_ALIGN_LEFT_MID, 6, 0);
+    lv_obj_set_style_bg_color(s_topbarBack, lv_color_hex(0x24406a), 0);
+    lv_obj_set_style_radius(s_topbarBack, 8, 0);
+    lv_obj_add_event_cb(s_topbarBack, topbar_back_cb, LV_EVENT_CLICKED, nullptr);
+    lv_obj_t *bl = lv_label_create(s_topbarBack);
+    lv_label_set_text(bl, LV_SYMBOL_HOME);
+    lv_obj_center(bl);
+
+    s_topbarTitle = lv_label_create(s_topbar);
+    lv_label_set_text(s_topbarTitle, PAGE_TITLES[PAGE_LAUNCHER]);
+    lv_obj_set_style_text_font(s_topbarTitle, &lv_font_montserrat_20, 0);
+    lv_obj_set_style_text_color(s_topbarTitle, lv_color_hex(0xe6ebf5), 0);
+    lv_obj_align(s_topbarTitle, LV_ALIGN_LEFT_MID, 76, 0);
+
+    // Wi-Fi signal bars, pinned to the far right.
+    s_topWifi = lv_obj_create(s_topbar);
+    lv_obj_set_size(s_topWifi, 26, 22);
+    lv_obj_set_style_bg_opa(s_topWifi, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(s_topWifi, 0, 0);
+    lv_obj_set_style_pad_all(s_topWifi, 0, 0);
+    lv_obj_clear_flag(s_topWifi, LV_OBJ_FLAG_SCROLLABLE);
+    for (int i = 0; i < 4; i++) {
+        int bw = 4, bgap = 3, h = 8 + i * 4;   // ascending 8/12/16/20 px
+        s_topWifiBar[i] = lv_obj_create(s_topWifi);
+        lv_obj_set_size(s_topWifiBar[i], bw, h);
+        lv_obj_align(s_topWifiBar[i], LV_ALIGN_BOTTOM_LEFT, i * (bw + bgap), 0);
+        lv_obj_set_style_border_width(s_topWifiBar[i], 0, 0);
+        lv_obj_set_style_radius(s_topWifiBar[i], 1, 0);
+        lv_obj_set_style_bg_color(s_topWifiBar[i], lv_color_hex(0x2a3550), 0);
+        lv_obj_clear_flag(s_topWifiBar[i], LV_OBJ_FLAG_SCROLLABLE);
+    }
+
+    // Global clock (right): muted date + bold time, same font so it reads cleanly.
+    // Positioned in topbar_relayout() right-to-left so the date never clips.
+    s_clockDate = lv_label_create(s_topbar);
+    lv_label_set_text(s_clockDate, "");
+    lv_obj_set_style_text_font(s_clockDate, &lv_font_montserrat_20, 0);
+    lv_obj_set_style_text_color(s_clockDate, lv_color_hex(0x8b97b0), 0);
+
+    s_clockTime = lv_label_create(s_topbar);
+    lv_label_set_text(s_clockTime, "--:--");
+    lv_obj_set_style_text_font(s_clockTime, &lv_font_montserrat_20, 0);
+    lv_obj_set_style_text_color(s_clockTime, lv_color_hex(0xffffff), 0);
+
+    topbar_relayout();
+    update_topbar_wifi();
+}
+
+static void launcher_tile_cb(lv_event_t *e) {
+    Page p = (Page)(intptr_t)lv_event_get_user_data(e);
+    ui_show_page(p);
+}
+
+// Home tile grid: one tile per panel (everything except the launcher itself).
+static void build_launcher(lv_obj_t *pg) {
+    lv_obj_set_flex_flow(pg, LV_FLEX_FLOW_ROW_WRAP);
+    lv_obj_set_flex_align(pg, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_row(pg, 16, 0);
+    lv_obj_set_style_pad_column(pg, 16, 0);
+    lv_obj_clear_flag(pg, LV_OBJ_FLAG_SCROLLABLE);
+
+    for (int p = PAGE_LAUNCHER + 1; p < PAGE_COUNT; p++) {
+        lv_obj_t *tile = lv_obj_create(pg);
+        lv_obj_set_size(tile, 168, 132);
+        lv_obj_set_style_bg_color(tile, lv_color_hex(0x161d2e), 0);
+        lv_obj_set_style_bg_color(tile, lv_color_hex(0x24406a), LV_STATE_PRESSED);
+        lv_obj_set_style_border_width(tile, 0, 0);
+        lv_obj_set_style_radius(tile, 12, 0);
+        lv_obj_clear_flag(tile, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_add_flag(tile, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_add_event_cb(tile, launcher_tile_cb, LV_EVENT_CLICKED, (void *)(intptr_t)p);
+
+        lv_obj_t *ic = lv_label_create(tile);
+        lv_label_set_text(ic, PAGE_ICONS[p]);
+        lv_obj_set_style_text_font(ic, &lv_font_montserrat_28, 0);
+        lv_obj_set_style_text_color(ic, lv_color_hex(0x7fb0ff), 0);
+        lv_obj_align(ic, LV_ALIGN_CENTER, 0, -18);
+
+        lv_obj_t *lb = lv_label_create(tile);
+        lv_label_set_text(lb, PAGE_TITLES[p]);
+        lv_obj_set_style_text_font(lb, &lv_font_montserrat_16, 0);
+        lv_obj_set_style_text_color(lb, lv_color_hex(0xe6ebf5), 0);
+        lv_obj_align(lb, LV_ALIGN_CENTER, 0, 24);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Photo frame — a full-bleed LVGL canvas backed by the PSRAM RGB565 buffer that
+// the data layer decodes JPEGs into. A status label overlays load/error text.
+// ---------------------------------------------------------------------------
+static void build_photo(lv_obj_t *pg) {
+    lv_obj_set_style_pad_all(pg, 0, 0);            // full-bleed, no inset
+    lv_obj_set_style_bg_color(pg, lv_color_hex(0x000000), 0);
+    lv_obj_clear_flag(pg, LV_OBJ_FLAG_SCROLLABLE);
+
+    photo_init();
+
+    s_photoCanvas = lv_canvas_create(pg);
+    lv_canvas_set_buffer(s_photoCanvas, photo_buffer(),
+                         photo_width(), photo_height(), LV_IMG_CF_TRUE_COLOR);
+    lv_obj_align(s_photoCanvas, LV_ALIGN_TOP_LEFT, 0, 0);
+
+    s_photoStatus = lv_label_create(pg);
+    lv_label_set_text(s_photoStatus, "Loading nature photo\u2026");
+    lv_obj_set_style_text_font(s_photoStatus, &lv_font_montserrat_20, 0);
+    lv_obj_set_style_text_color(s_photoStatus, lv_color_hex(0xe6ebf5), 0);
+    lv_obj_set_style_bg_color(s_photoStatus, lv_color_hex(0x000000), 0);
+    lv_obj_set_style_bg_opa(s_photoStatus, LV_OPA_50, 0);
+    lv_obj_set_style_pad_all(s_photoStatus, 8, 0);
+    lv_obj_set_style_radius(s_photoStatus, 6, 0);
+    lv_obj_align(s_photoStatus, LV_ALIGN_CENTER, 0, 0);
+}
+
+void ui_photo_refresh(bool ok, const char *status) {
+    if (!s_photoCanvas) return;
+    if (ok) {
+        if (s_photoStatus) lv_obj_add_flag(s_photoStatus, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_invalidate(s_photoCanvas);
+    } else if (s_photoStatus) {
+        lv_label_set_text(s_photoStatus, status && status[0] ? status : "Photo unavailable");
+        lv_obj_clear_flag(s_photoStatus, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_align(s_photoStatus, LV_ALIGN_CENTER, 0, 0);
     }
 }
 
@@ -1364,11 +1491,11 @@ static void cal_render() {
     lv_obj_clear_flag(s_calList, LV_OBJ_FLAG_HIDDEN);
     if (isList) {
         lv_obj_set_y(s_calList, 132);
-        lv_obj_set_height(s_calList, LV_VER_RES - 132 - 8);
+        lv_obj_set_height(s_calList, PAGE_H - 132 - 8);
     } else {
         if (s_calHero) lv_obj_add_flag(s_calHero, LV_OBJ_FLAG_HIDDEN);
         lv_obj_set_y(s_calList, 44);
-        lv_obj_set_height(s_calList, LV_VER_RES - 44 - 8);
+        lv_obj_set_height(s_calList, PAGE_H - 44 - 8);
     }
 
     long lo = 0, hi = 0; char hdr[48] = "";
@@ -1545,7 +1672,7 @@ static void build_calendar(lv_obj_t *pg) {
 
     const int listY = 40 + heroH + 8;
     s_calList = lv_obj_create(pg);
-    lv_obj_set_size(s_calList, CW, LV_VER_RES - listY - 8);
+    lv_obj_set_size(s_calList, CW, PAGE_H - listY - 8);
     lv_obj_align(s_calList, LV_ALIGN_TOP_LEFT, 0, listY);
     lv_obj_set_style_bg_opa(s_calList, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(s_calList, 0, 0);
@@ -1584,7 +1711,7 @@ static void build_calendar(lv_obj_t *pg) {
     {
         const int cellW = CW / 7;
         const int gridY = 64;
-        const int cellH = (LV_VER_RES - gridY - 8) / 6;
+        const int cellH = (PAGE_H - gridY - 8) / 6;
         static const char *DOW[7] = {"Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"};
         for (int c = 0; c < 7; c++) {
             lv_obj_t *d = lv_label_create(pg);
@@ -1598,7 +1725,7 @@ static void build_calendar(lv_obj_t *pg) {
             s_calDow[c] = d;
         }
         s_calGrid = lv_obj_create(pg);
-        lv_obj_set_size(s_calGrid, CW, LV_VER_RES - gridY - 6);
+        lv_obj_set_size(s_calGrid, CW, PAGE_H - gridY - 6);
         lv_obj_align(s_calGrid, LV_ALIGN_TOP_LEFT, 0, gridY);
         lv_obj_set_style_bg_opa(s_calGrid, LV_OPA_TRANSP, 0);
         lv_obj_set_style_border_width(s_calGrid, 0, 0);
@@ -1725,8 +1852,8 @@ static void build_air(lv_obj_t *pg) {
     lv_obj_align(s_airStatus, LV_ALIGN_TOP_LEFT, 0, 2);
 
     // US AQI ring gauge (left).
-    s_airAqiArc = make_ring(pg, 156, 15, 300);
-    lv_obj_align(s_airAqiArc, LV_ALIGN_TOP_LEFT, 4, 18);
+    s_airAqiArc = make_ring(pg, 180, 15, 300);
+    lv_obj_align(s_airAqiArc, LV_ALIGN_TOP_LEFT, 4, 14);
 
     s_airAqi = lv_label_create(s_airAqiArc);
     lv_label_set_text(s_airAqi, "--");
@@ -1746,7 +1873,7 @@ static void build_air(lv_obj_t *pg) {
     lv_obj_set_style_text_align(s_airCat, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_set_style_text_font(s_airCat, &lv_font_montserrat_16, 0);
     lv_obj_set_style_text_color(s_airCat, lv_color_hex(0xe6ebf5), 0);
-    lv_obj_align(s_airCat, LV_ALIGN_TOP_LEFT, 0, 200);
+    lv_obj_align(s_airCat, LV_ALIGN_TOP_LEFT, 6, 198);
 
     // UV index ring gauge (right).
     s_airUvArc = make_ring(pg, 128, 13, 12);
@@ -1766,7 +1893,7 @@ static void build_air(lv_obj_t *pg) {
 
     lv_obj_t **slots[4] = { &s_airPm25, &s_airPm10, &s_airO3, &s_airNo2 };
     const char *names[4] = { "PM2.5", "PM10", "Ozone", "NO2" };
-    const int rowH = 38, gap = 6, y0 = 232, rowW = CW - 12;
+    const int rowH = 38, gap = 6, y0 = 224, rowW = CW - 12;
     for (int i = 0; i < 4; i++) {
         lv_obj_t *r = lv_obj_create(pg);
         lv_obj_set_size(r, rowW, rowH);
@@ -1905,68 +2032,109 @@ static void build_diag(lv_obj_t *pg) {
     lv_obj_set_style_text_color(title, lv_color_hex(0xe6ebf5), 0);
     lv_obj_align(title, LV_ALIGN_TOP_LEFT, 0, 2);
 
+    // ---- Left column: device text stats + board-only trend charts. ----
+    const int LX = 0, LSW = 340, LSH = 56;
+
     s_diagLbl = lv_label_create(pg);
     lv_label_set_text(s_diagLbl, "Collecting device stats...");
-    lv_obj_set_style_text_font(s_diagLbl, &lv_font_montserrat_16, 0);
+    lv_obj_set_style_text_font(s_diagLbl, &lv_font_montserrat_14, 0);
     lv_obj_set_style_text_color(s_diagLbl, lv_color_hex(0xcdd6ea), 0);
-    lv_obj_set_style_text_line_space(s_diagLbl, 6, 0);
-    lv_obj_align(s_diagLbl, LV_ALIGN_TOP_LEFT, 0, 40);
+    lv_obj_set_style_text_line_space(s_diagLbl, 4, 0);
+    lv_obj_align(s_diagLbl, LV_ALIGN_TOP_LEFT, LX, 34);
 
-    // Right column: live heap + RSSI trend sparklines (canvas bufs live in PSRAM).
+    // ESP32-S3 on-die temperature sensor trend (canvas bufs live in PSRAM).
+    static lv_color_t *tBuf = nullptr, *fBuf = nullptr;
+
+    lv_obj_t *tt = lv_label_create(pg);
+    lv_label_set_text(tt, "Die temp (F)");
+    lv_obj_set_style_text_font(tt, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_color(tt, lv_color_hex(0x8b97b0), 0);
+    lv_obj_align(tt, LV_ALIGN_TOP_LEFT, LX, 206);
+    s_diagTempVal = lv_label_create(pg);
+    lv_label_set_text(s_diagTempVal, "--");
+    lv_obj_set_style_text_font(s_diagTempVal, &lv_font_montserrat_16, 0);
+    lv_obj_set_style_text_color(s_diagTempVal, lv_color_hex(0xffb454), 0);
+    lv_obj_align(s_diagTempVal, LV_ALIGN_TOP_LEFT, LX + LSW - 56, 204);
+    if (!tBuf) tBuf = (lv_color_t *)heap_caps_malloc(
+        LSW * LSH * sizeof(lv_color_t), MALLOC_CAP_SPIRAM);
+    s_diagTempSpark = lv_canvas_create(pg);
+    lv_canvas_set_buffer(s_diagTempSpark, tBuf, LSW, LSH, LV_IMG_CF_TRUE_COLOR);
+    lv_obj_align(s_diagTempSpark, LV_ALIGN_TOP_LEFT, LX, 228);
+    lv_canvas_fill_bg(s_diagTempSpark, lv_color_hex(0x141c2e), LV_OPA_COVER);
+
+    // Measured render FPS trend.
+    lv_obj_t *ft = lv_label_create(pg);
+    lv_label_set_text(ft, "Render (FPS)");
+    lv_obj_set_style_text_font(ft, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_color(ft, lv_color_hex(0x8b97b0), 0);
+    lv_obj_align(ft, LV_ALIGN_TOP_LEFT, LX, 296);
+    s_diagFpsVal = lv_label_create(pg);
+    lv_label_set_text(s_diagFpsVal, "--");
+    lv_obj_set_style_text_font(s_diagFpsVal, &lv_font_montserrat_16, 0);
+    lv_obj_set_style_text_color(s_diagFpsVal, lv_color_hex(0xa78bfa), 0);
+    lv_obj_align(s_diagFpsVal, LV_ALIGN_TOP_LEFT, LX + LSW - 56, 294);
+    if (!fBuf) fBuf = (lv_color_t *)heap_caps_malloc(
+        LSW * LSH * sizeof(lv_color_t), MALLOC_CAP_SPIRAM);
+    s_diagFpsSpark = lv_canvas_create(pg);
+    lv_canvas_set_buffer(s_diagFpsSpark, fBuf, LSW, LSH, LV_IMG_CF_TRUE_COLOR);
+    lv_obj_align(s_diagFpsSpark, LV_ALIGN_TOP_LEFT, LX, 318);
+    lv_canvas_fill_bg(s_diagFpsSpark, lv_color_hex(0x141c2e), LV_OPA_COVER);
+
+    // ---- Right column: live heap + RSSI trends, resource bars, signal. ----
     static lv_color_t *heapBuf = nullptr, *rssiBuf = nullptr;
-    const int RX = 280;
+    const int RX = 360;
 
     lv_obj_t *ht = lv_label_create(pg);
     lv_label_set_text(ht, "Free heap (KB)");
     lv_obj_set_style_text_font(ht, &lv_font_montserrat_14, 0);
     lv_obj_set_style_text_color(ht, lv_color_hex(0x8b97b0), 0);
-    lv_obj_align(ht, LV_ALIGN_TOP_LEFT, RX, 42);
+    lv_obj_align(ht, LV_ALIGN_TOP_LEFT, RX, 34);
     s_diagHeapVal = lv_label_create(pg);
     lv_label_set_text(s_diagHeapVal, "--");
     lv_obj_set_style_text_font(s_diagHeapVal, &lv_font_montserrat_16, 0);
     lv_obj_set_style_text_color(s_diagHeapVal, lv_color_hex(0x39d98a), 0);
-    lv_obj_align(s_diagHeapVal, LV_ALIGN_TOP_LEFT, RX + DSP_W - 70, 40);
+    lv_obj_align(s_diagHeapVal, LV_ALIGN_TOP_LEFT, RX + DSP_W - 70, 32);
     if (!heapBuf) heapBuf = (lv_color_t *)heap_caps_malloc(
         DSP_W * DSP_H * sizeof(lv_color_t), MALLOC_CAP_SPIRAM);
     s_diagHeapSpark = lv_canvas_create(pg);
     lv_canvas_set_buffer(s_diagHeapSpark, heapBuf, DSP_W, DSP_H, LV_IMG_CF_TRUE_COLOR);
-    lv_obj_align(s_diagHeapSpark, LV_ALIGN_TOP_LEFT, RX, 66);
+    lv_obj_align(s_diagHeapSpark, LV_ALIGN_TOP_LEFT, RX, 58);
     lv_canvas_fill_bg(s_diagHeapSpark, lv_color_hex(0x141c2e), LV_OPA_COVER);
 
     lv_obj_t *rt = lv_label_create(pg);
     lv_label_set_text(rt, "Wi-Fi RSSI (dBm)");
     lv_obj_set_style_text_font(rt, &lv_font_montserrat_14, 0);
     lv_obj_set_style_text_color(rt, lv_color_hex(0x8b97b0), 0);
-    lv_obj_align(rt, LV_ALIGN_TOP_LEFT, RX, 152);
+    lv_obj_align(rt, LV_ALIGN_TOP_LEFT, RX, 128);
     s_diagRssiVal = lv_label_create(pg);
     lv_label_set_text(s_diagRssiVal, "--");
     lv_obj_set_style_text_font(s_diagRssiVal, &lv_font_montserrat_16, 0);
     lv_obj_set_style_text_color(s_diagRssiVal, lv_color_hex(0x5aa9ff), 0);
-    lv_obj_align(s_diagRssiVal, LV_ALIGN_TOP_LEFT, RX + DSP_W - 90, 150);
+    lv_obj_align(s_diagRssiVal, LV_ALIGN_TOP_LEFT, RX + DSP_W - 90, 126);
     if (!rssiBuf) rssiBuf = (lv_color_t *)heap_caps_malloc(
         DSP_W * DSP_H * sizeof(lv_color_t), MALLOC_CAP_SPIRAM);
     s_diagRssiSpark = lv_canvas_create(pg);
     lv_canvas_set_buffer(s_diagRssiSpark, rssiBuf, DSP_W, DSP_H, LV_IMG_CF_TRUE_COLOR);
-    lv_obj_align(s_diagRssiSpark, LV_ALIGN_TOP_LEFT, RX, 176);
+    lv_obj_align(s_diagRssiSpark, LV_ALIGN_TOP_LEFT, RX, 152);
     lv_canvas_fill_bg(s_diagRssiSpark, lv_color_hex(0x141c2e), LV_OPA_COVER);
 
     // Resource usage bars (internal RAM, PSRAM, flash) under the sparklines.
-    s_diagRamBar   = make_stat_bar(pg, "RAM",   RX, 256, &s_diagRamVal);
-    s_diagPsramBar = make_stat_bar(pg, "PSRAM", RX, 290, &s_diagPsramVal);
-    s_diagFlashBar = make_stat_bar(pg, "Flash", RX, 324, &s_diagFlashVal);
+    s_diagRamBar   = make_stat_bar(pg, "RAM",   RX, 228, &s_diagRamVal);
+    s_diagPsramBar = make_stat_bar(pg, "PSRAM", RX, 262, &s_diagPsramVal);
+    s_diagFlashBar = make_stat_bar(pg, "Flash", RX, 296, &s_diagFlashVal);
 
     // Wi-Fi signal strength: 4 ascending bars + quality caption.
     lv_obj_t *sl = lv_label_create(pg);
     lv_label_set_text(sl, "Signal");
     lv_obj_set_style_text_font(sl, &lv_font_montserrat_14, 0);
     lv_obj_set_style_text_color(sl, lv_color_hex(0x8b97b0), 0);
-    lv_obj_align(sl, LV_ALIGN_TOP_LEFT, RX, 356);
-    const int bw = 16, bgap = 8, baseY = 428;
+    lv_obj_align(sl, LV_ALIGN_TOP_LEFT, RX, 330);
+    const int bw = 16, bgap = 8, baseY = 396;
     for (int i = 0; i < 4; i++) {
         int h = 14 + i * 14;
         s_diagSigBar[i] = lv_obj_create(pg);
         lv_obj_set_size(s_diagSigBar[i], bw, h);
-        lv_obj_align(s_diagSigBar[i], LV_ALIGN_TOP_LEFT, RX + i * (bw + bgap), baseY - h);
+        lv_obj_align(s_diagSigBar[i], LV_ALIGN_TOP_LEFT, RX + 64 + i * (bw + bgap), baseY - h);
         lv_obj_set_style_border_width(s_diagSigBar[i], 0, 0);
         lv_obj_set_style_radius(s_diagSigBar[i], 3, 0);
         lv_obj_set_style_bg_color(s_diagSigBar[i], lv_color_hex(0x2a3550), 0);
@@ -1975,46 +2143,7 @@ static void build_diag(lv_obj_t *pg) {
     lv_label_set_text(s_diagSigTxt, "--");
     lv_obj_set_style_text_font(s_diagSigTxt, &lv_font_montserrat_16, 0);
     lv_obj_set_style_text_color(s_diagSigTxt, lv_color_hex(0x8b97b0), 0);
-    lv_obj_align(s_diagSigTxt, LV_ALIGN_TOP_LEFT, RX + 4 * (bw + bgap) + 14, baseY - 26);
-
-    // Left column (below the text stats): board-only trend charts — the ESP32-S3
-    // on-die temperature sensor and the measured render FPS. Canvas bufs in PSRAM.
-    static lv_color_t *tBuf = nullptr, *fBuf = nullptr;
-    const int LSW = 260, LSH = 56, LX = 0;
-
-    lv_obj_t *tt = lv_label_create(pg);
-    lv_label_set_text(tt, "Die temp (F)");
-    lv_obj_set_style_text_font(tt, &lv_font_montserrat_14, 0);
-    lv_obj_set_style_text_color(tt, lv_color_hex(0x8b97b0), 0);
-    lv_obj_align(tt, LV_ALIGN_TOP_LEFT, LX, 250);
-    s_diagTempVal = lv_label_create(pg);
-    lv_label_set_text(s_diagTempVal, "--");
-    lv_obj_set_style_text_font(s_diagTempVal, &lv_font_montserrat_16, 0);
-    lv_obj_set_style_text_color(s_diagTempVal, lv_color_hex(0xffb454), 0);
-    lv_obj_align(s_diagTempVal, LV_ALIGN_TOP_LEFT, LX + LSW - 56, 248);
-    if (!tBuf) tBuf = (lv_color_t *)heap_caps_malloc(
-        LSW * LSH * sizeof(lv_color_t), MALLOC_CAP_SPIRAM);
-    s_diagTempSpark = lv_canvas_create(pg);
-    lv_canvas_set_buffer(s_diagTempSpark, tBuf, LSW, LSH, LV_IMG_CF_TRUE_COLOR);
-    lv_obj_align(s_diagTempSpark, LV_ALIGN_TOP_LEFT, LX, 272);
-    lv_canvas_fill_bg(s_diagTempSpark, lv_color_hex(0x141c2e), LV_OPA_COVER);
-
-    lv_obj_t *ft = lv_label_create(pg);
-    lv_label_set_text(ft, "Render (FPS)");
-    lv_obj_set_style_text_font(ft, &lv_font_montserrat_14, 0);
-    lv_obj_set_style_text_color(ft, lv_color_hex(0x8b97b0), 0);
-    lv_obj_align(ft, LV_ALIGN_TOP_LEFT, LX, 346);
-    s_diagFpsVal = lv_label_create(pg);
-    lv_label_set_text(s_diagFpsVal, "--");
-    lv_obj_set_style_text_font(s_diagFpsVal, &lv_font_montserrat_16, 0);
-    lv_obj_set_style_text_color(s_diagFpsVal, lv_color_hex(0xa78bfa), 0);
-    lv_obj_align(s_diagFpsVal, LV_ALIGN_TOP_LEFT, LX + LSW - 56, 344);
-    if (!fBuf) fBuf = (lv_color_t *)heap_caps_malloc(
-        LSW * LSH * sizeof(lv_color_t), MALLOC_CAP_SPIRAM);
-    s_diagFpsSpark = lv_canvas_create(pg);
-    lv_canvas_set_buffer(s_diagFpsSpark, fBuf, LSW, LSH, LV_IMG_CF_TRUE_COLOR);
-    lv_obj_align(s_diagFpsSpark, LV_ALIGN_TOP_LEFT, LX, 368);
-    lv_canvas_fill_bg(s_diagFpsSpark, lv_color_hex(0x141c2e), LV_OPA_COVER);
+    lv_obj_align(s_diagSigTxt, LV_ALIGN_TOP_LEFT, RX + 64 + 4 * (bw + bgap) + 14, baseY - 26);
 }
 
 void ui_init() {
@@ -2022,18 +2151,23 @@ void ui_init() {
     lv_obj_set_style_bg_color(scr, lv_color_hex(0x0f1420), 0);
     lv_obj_clear_flag(scr, LV_OBJ_FLAG_SCROLLABLE);
 
-    build_sidebar(scr);
+    build_topbar(scr);
 
     for (int i = 0; i < PAGE_COUNT; i++) s_pages[i] = make_page(scr);
-    build_home(s_pages[PAGE_HOME]);
+    build_launcher(s_pages[PAGE_LAUNCHER]);
+    build_home(s_pages[PAGE_WEATHER]);
     build_flights(s_pages[PAGE_FLIGHTS]);
     build_calendar(s_pages[PAGE_CALENDAR]);
     build_tickers(s_pages[PAGE_TICKERS]);
     build_air(s_pages[PAGE_AIR]);
+    build_photo(s_pages[PAGE_PHOTO]);
     build_diag(s_pages[PAGE_DIAG]);
     build_config(s_pages[PAGE_CONFIG]);
 
-    ui_show_page(PAGE_HOME);
+    // Restore the last-selected panel (first boot / bad value -> launcher).
+    Page start = (Page)settings().lastPanel;
+    if (start <= PAGE_LAUNCHER || start >= PAGE_COUNT) start = PAGE_LAUNCHER;
+    ui_show_page(start);
 }
 
 static void update_cal_hero() {
@@ -2107,6 +2241,7 @@ static void update_clock() {
     char dbuf[48];
     strftime(dbuf, sizeof(dbuf), "%A, %B %d", &t);
     lv_label_set_text(s_clockDate, dbuf);
+    topbar_relayout();
     draw_sky(t.tm_hour * 60 + t.tm_min);
 }
 
@@ -2186,8 +2321,8 @@ static void update_diag_page() {
     draw_diag_spark(s_diagHeapSpark, s_heapHist, s_diagCount, true, 0, 0, 0x39d98a);
     draw_diag_spark(s_diagRssiSpark, s_rssiHist, s_diagCount, false, -90.0f, -30.0f, 0x5aa9ff);
     // Board-only trends: die temperature + render FPS (autoscaled, narrower canvas).
-    draw_diag_spark(s_diagTempSpark, s_tempHist, s_diagCount, true, 0, 0, 0xffb454, 260, 56);
-    draw_diag_spark(s_diagFpsSpark,  s_fpsHist,  s_diagCount, true, 0, 0, 0xa78bfa, 260, 56);
+    draw_diag_spark(s_diagTempSpark, s_tempHist, s_diagCount, true, 0, 0, 0xffb454, 340, 56);
+    draw_diag_spark(s_diagFpsSpark,  s_fpsHist,  s_diagCount, true, 0, 0, 0xa78bfa, 340, 56);
     char v[24];
     snprintf(v, sizeof(v), "%u KB", (unsigned)(heap / 1024));
     lv_label_set_text(s_diagHeapVal, v);
@@ -2240,9 +2375,9 @@ static void animate_weather() {
 }
 
 void ui_tick() {
-    // Home-page weather glyph animates faster than the 500ms housekeeping tick.
+    // Weather-panel glyph animates faster than the 500ms housekeeping tick.
     static uint32_t lastAnim = 0;
-    if (s_active == PAGE_HOME && s_wxCode >= 0 && millis() - lastAnim >= 150) {
+    if (s_active == PAGE_WEATHER && s_wxCode >= 0 && millis() - lastAnim >= 150) {
         lastAnim = millis();
         s_wxFrame++;
         animate_weather();
@@ -2252,19 +2387,18 @@ void ui_tick() {
     if (millis() - last < 500) return;
     last = millis();
 
-    // Surface the right screen automatically as the network state changes:
-    // entering the setup hotspot jumps to Config (join instructions + QR),
-    // and coming online returns to the clock.
+    // Surface the setup screen automatically when entering the hotspot (join
+    // instructions + QR). Coming online leaves the user on their chosen panel.
     static NetState prevState = NetState::Booting;
     NetState st = net_state();
     if (st != prevState) {
-        if (st == NetState::Portal)         ui_show_page(PAGE_CONFIG);
-        else if (st == NetState::Connected) ui_show_page(PAGE_HOME);
+        if (st == NetState::Portal) ui_show_page(PAGE_CONFIG);
         prevState = st;
     }
 
     diag_sample();
     update_clock();
+    update_topbar_wifi();
     update_config_page();
     update_diag_page();
     if (s_active == PAGE_CALENDAR) update_cal_hero();

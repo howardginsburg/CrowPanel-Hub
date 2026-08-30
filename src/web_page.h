@@ -77,6 +77,10 @@ static const char CONFIG_PAGE[] PROGMEM = R"HTML(<!DOCTYPE html>
       <input id="tickers" placeholder="MSFT,AAPL,NVDA">
       <label>Refresh interval (seconds)</label>
       <input id="pollSeconds" type="number" min="20" max="3600">
+      <label>Photo frame source URL <small>(blank = built-in nature)</small></label>
+      <input id="photoUrl" placeholder="https://loremflickr.com/800/436/nature">
+      <label>Photo rotate interval (seconds)</label>
+      <input id="photoSeconds" type="number" min="10" max="3600">
       <div class="chk"><input id="useMetric" type="checkbox"><label style="margin:0">Metric units</label></div>
       <div class="chk"><input id="use24hClock" type="checkbox"><label style="margin:0">24-hour clock</label></div>
     </fieldset>
@@ -96,7 +100,7 @@ static const char CONFIG_PAGE[] PROGMEM = R"HTML(<!DOCTYPE html>
 <script>
 const $ = id => document.getElementById(id);
 const fields = ["wifiSsid","locationName","homeLat","homeLon","radarRangeNm","icsUrl",
-  "tickers","pollSeconds","brightness","configPin"];
+  "tickers","pollSeconds","photoUrl","photoSeconds","brightness","configPin"];
 const bools  = ["useMetric","use24hClock"];
 
 async function load() {
@@ -156,7 +160,7 @@ $('f').addEventListener('submit', async e => {
   fields.forEach(k => body[k] = $(k).value);
   bools.forEach(k => body[k] = $(k).checked);
   ['homeLat','homeLon'].forEach(k => body[k] = parseFloat(body[k]));
-  ['radarRangeNm','pollSeconds','brightness'].forEach(k => body[k] = parseInt(body[k]||0));
+  ['radarRangeNm','pollSeconds','photoSeconds','brightness'].forEach(k => body[k] = parseInt(body[k]||0));
   if (!body.wifiPass) delete body.wifiPass; else {}
   body.wifiPass = $('wifiPass').value;
   if (!body.wifiPass) delete body.wifiPass;

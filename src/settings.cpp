@@ -18,10 +18,13 @@ static void apply_defaults() {
     s_cfg.tickers      = "MSFT,AAPL,NVDA,GOOGL,AMZN";
     s_cfg.useMetric    = true;
     s_cfg.use24hClock  = true;
+    s_cfg.photoUrl     = "";
+    s_cfg.photoSeconds = 60;
     s_cfg.brightness   = 200;
     s_cfg.pollSeconds  = 60;
     s_cfg.tickerTf     = 0;
     s_cfg.calView      = 0;
+    s_cfg.lastPanel    = 0;
     s_cfg.configPin    = "";
 }
 
@@ -38,10 +41,13 @@ void settings_load() {
     s_cfg.tickers      = s_prefs.getString("tickers",  s_cfg.tickers);
     s_cfg.useMetric    = s_prefs.getBool  ("metric",   s_cfg.useMetric);
     s_cfg.use24hClock  = s_prefs.getBool  ("clk24",    s_cfg.use24hClock);
+    s_cfg.photoUrl     = s_prefs.getString("photoUrl", s_cfg.photoUrl);
+    s_cfg.photoSeconds = s_prefs.getUShort("photoSec", s_cfg.photoSeconds);
     s_cfg.brightness   = s_prefs.getUChar ("bright",   s_cfg.brightness);
     s_cfg.pollSeconds  = s_prefs.getUShort("poll",     s_cfg.pollSeconds);
     s_cfg.tickerTf     = s_prefs.getUChar ("tickTf",   s_cfg.tickerTf);
     s_cfg.calView      = s_prefs.getUChar ("calView",  s_cfg.calView);
+    s_cfg.lastPanel    = s_prefs.getUChar ("lastPage", s_cfg.lastPanel);
     s_cfg.configPin    = s_prefs.getString("pin",      s_cfg.configPin);
     s_prefs.end();
 }
@@ -58,10 +64,13 @@ void settings_save() {
     s_prefs.putString("tickers",  s_cfg.tickers);
     s_prefs.putBool  ("metric",   s_cfg.useMetric);
     s_prefs.putBool  ("clk24",    s_cfg.use24hClock);
+    s_prefs.putString("photoUrl", s_cfg.photoUrl);
+    s_prefs.putUShort("photoSec", s_cfg.photoSeconds);
     s_prefs.putUChar ("bright",   s_cfg.brightness);
     s_prefs.putUShort("poll",     s_cfg.pollSeconds);
     s_prefs.putUChar ("tickTf",   s_cfg.tickerTf);
     s_prefs.putUChar ("calView",  s_cfg.calView);
+    s_prefs.putUChar ("lastPage", s_cfg.lastPanel);
     s_prefs.putString("pin",      s_cfg.configPin);
     s_prefs.end();
 }
@@ -82,6 +91,14 @@ void settings_set_cal_view(uint8_t view) {
     s_prefs.end();
 }
 
+void settings_set_last_panel(uint8_t panel) {
+    if (s_cfg.lastPanel == panel) return;
+    s_cfg.lastPanel = panel;
+    s_prefs.begin(NS, false);
+    s_prefs.putUChar("lastPage", panel);
+    s_prefs.end();
+}
+
 Settings &settings() { return s_cfg; }
 
 bool settings_has_wifi() { return s_cfg.wifiSsid.length() > 0; }
@@ -96,7 +113,7 @@ void settings_clear_wifi() {
 }
 
 bool settings_import_json(const String &json) {
-    StaticJsonDocument<1024> doc;
+    StaticJsonDocument<1536> doc;
     if (deserializeJson(doc, json) != DeserializationError::Ok) return false;
 
     if (doc.containsKey("wifiSsid"))     s_cfg.wifiSsid     = doc["wifiSsid"].as<String>();
@@ -109,6 +126,8 @@ bool settings_import_json(const String &json) {
     if (doc.containsKey("tickers"))      s_cfg.tickers      = doc["tickers"].as<String>();
     if (doc.containsKey("useMetric"))    s_cfg.useMetric    = doc["useMetric"].as<bool>();
     if (doc.containsKey("use24hClock"))  s_cfg.use24hClock  = doc["use24hClock"].as<bool>();
+    if (doc.containsKey("photoUrl"))     s_cfg.photoUrl     = doc["photoUrl"].as<String>();
+    if (doc.containsKey("photoSeconds")) s_cfg.photoSeconds = doc["photoSeconds"].as<uint16_t>();
     if (doc.containsKey("brightness"))   s_cfg.brightness   = doc["brightness"].as<uint8_t>();
     if (doc.containsKey("pollSeconds"))  s_cfg.pollSeconds  = doc["pollSeconds"].as<uint16_t>();
     if (doc.containsKey("configPin"))    s_cfg.configPin    = doc["configPin"].as<String>();
@@ -116,11 +135,12 @@ bool settings_import_json(const String &json) {
     // Clamp to safe ranges.
     if (s_cfg.radarRangeNm > 250) s_cfg.radarRangeNm = 250;
     if (s_cfg.pollSeconds  < 20)  s_cfg.pollSeconds  = 20;
+    if (s_cfg.photoSeconds < 10)  s_cfg.photoSeconds = 10;
     return true;
 }
 
 String settings_export_json() {
-    StaticJsonDocument<1024> doc;
+    StaticJsonDocument<1536> doc;
     doc["wifiSsid"]      = s_cfg.wifiSsid;
     // Never expose the stored Wi-Fi password to the client.
     doc["wifiConfigured"]= settings_has_wifi();
@@ -132,6 +152,8 @@ String settings_export_json() {
     doc["tickers"]       = s_cfg.tickers;
     doc["useMetric"]     = s_cfg.useMetric;
     doc["use24hClock"]   = s_cfg.use24hClock;
+    doc["photoUrl"]      = s_cfg.photoUrl;
+    doc["photoSeconds"]  = s_cfg.photoSeconds;
     doc["brightness"]    = s_cfg.brightness;
     doc["pollSeconds"]   = s_cfg.pollSeconds;
     doc["pinSet"]        = s_cfg.configPin.length() > 0;
