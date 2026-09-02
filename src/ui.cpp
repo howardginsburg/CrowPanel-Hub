@@ -35,11 +35,17 @@ static Page      s_active = PAGE_LAUNCHER;
 static lv_obj_t *s_clockTime;
 static lv_obj_t *s_clockDate;
 static lv_obj_t *s_weatherBody;
+static lv_obj_t *s_wxDetail;                          // right column: feels-like + UV
 static lv_obj_t *s_wxIcon;
 static int       s_wxCode  = -1;                     // current weather code (for animation)
 static uint32_t  s_wxFrame = 0;                       // weather glyph animation frame
 static lv_obj_t *s_wxTemp;
 static lv_obj_t *s_wxLoc;
+static String    s_wxSummary;                         // conditions text (for body recompose)
+static int       s_wxHum     = 0;                     // humidity %% (for body recompose)
+static float     s_wxWindMph = 0;                     // wind mph (for body recompose)
+static float     s_wxFeelsF  = -1000;                 // apparent temp F (-1000 = none yet)
+static float     s_wxUvIdx   = -1;                    // daily max UV (-1 = none yet)
 static lv_obj_t *s_fcCard[UI_FORECAST_DAYS];
 static lv_obj_t *s_fcIcon[UI_FORECAST_DAYS];
 static lv_obj_t *s_fcDay[UI_FORECAST_DAYS];
@@ -138,6 +144,9 @@ static lv_obj_t *s_sunLabel;                          // sunrise/sunset row (Hom
 static lv_obj_t *s_moonLabel;                         // moon phase + illumination (Home)
 static lv_obj_t *s_skyCanvas;                         // day/night sky gradient (Home clock)
 static int       s_srMin = -1, s_ssMin = -1;          // sunrise/sunset (local minutes)
+static int       s_moonIdx = -1, s_moonPct = 0;       // moon phase index + illumination %
+static lv_obj_t *s_sunRiseLbl;                        // sunrise time, sun-path panel corner
+static lv_obj_t *s_sunSetLbl;                         // sunset time, sun-path panel corner
 static lv_obj_t *s_hrCell[UI_HOURLY_N];              // hourly strip cells (Home)
 static lv_obj_t *s_hrHour[UI_HOURLY_N];
 static lv_obj_t *s_hrTemp[UI_HOURLY_N];
@@ -167,6 +176,8 @@ static int   s_diagCount = 0;
 // failure keeps the last-good screen instead of blanking it — only the status
 // line flips to an amber "offline / last update" note.
 static bool s_wxHave = false, s_flightsHave = false, s_airHave = false;
+static bool s_tickersHave = false, s_calHave = false, s_photoHave = false;
+static lv_obj_t *s_pageSpin[PAGE_COUNT] = { nullptr };   // per-page loading spinners
 static lv_obj_t *s_cfgState;
 static lv_obj_t *s_cfgDetails;
 static lv_obj_t *s_cfgQr;
@@ -186,6 +197,29 @@ static const char *PAGE_ICONS[PAGE_COUNT] = {
 // ---------------------------------------------------------------------------
 // Navigation
 // ---------------------------------------------------------------------------
+static void replay_page_anims(Page p);   // re-sweep gauges/bars when a panel gains focus
+
+// Has a data page already received good data? (non-data pages report true so
+// they never show a loading spinner.)
+static bool page_has_data(Page p) {
+    switch (p) {
+        case PAGE_WEATHER:  return s_wxHave;
+        case PAGE_FLIGHTS:  return s_flightsHave;
+        case PAGE_CALENDAR: return s_calHave;
+        case PAGE_TICKERS:  return s_tickersHave;
+        case PAGE_AIR:      return s_airHave;
+        case PAGE_PHOTO:    return s_photoHave;
+        default:            return true;
+    }
+}
+
+static void page_set_loading(Page p, bool on) {
+    lv_obj_t *sp = (p >= 0 && p < PAGE_COUNT) ? s_pageSpin[p] : nullptr;
+    if (!sp) return;
+    if (on) { lv_obj_clear_flag(sp, LV_OBJ_FLAG_HIDDEN); lv_obj_move_foreground(sp); }
+    else      lv_obj_add_flag(sp, LV_OBJ_FLAG_HIDDEN);
+}
+
 void ui_show_page(Page p) {
     if (p < 0 || p >= PAGE_COUNT) return;
     for (int i = 0; i < PAGE_COUNT; i++) {
@@ -200,6 +234,9 @@ void ui_show_page(Page p) {
     if (s_topbarTitle) lv_label_set_text(s_topbarTitle, PAGE_TITLES[p]);
     s_active = p;
     if (!launcher) settings_set_last_panel((uint8_t)p);
+    // Show a loading spinner while the freshly-focused data page has no data yet.
+    page_set_loading(p, !page_has_data(p) && net_state() == NetState::Connected);
+    replay_page_anims(p);
 }
 
 Page ui_active_page() { return s_active; }
@@ -347,7 +384,7 @@ static void wx_draw(lv_obj_t *cv, int cx, int cy, int s, int code, int phase = 0
 
 // Day/night sky gradient behind the Home clock. -----------------------------
 #define SKY_W 480
-#define SKY_H 150
+#define SKY_H 104
 static uint32_t sky_mix(uint32_t a, uint32_t b, float t) {
     int ar = (a >> 16) & 0xff, ag = (a >> 8) & 0xff, ab = a & 0xff;
     int br = (b >> 16) & 0xff, bg = (b >> 8) & 0xff, bb = b & 0xff;
@@ -367,7 +404,28 @@ static void sky_stars() {
     lv_draw_rect_dsc_t s; lv_draw_rect_dsc_init(&s);
     s.bg_color = lv_color_hex(0xdfe6f5); s.bg_opa = LV_OPA_70; s.radius = LV_RADIUS_CIRCLE;
     for (unsigned k = 0; k < sizeof(SX) / sizeof(SX[0]); k++)
-        lv_canvas_draw_rect(s_skyCanvas, SX[k], SY[k], 2, 2, &s);
+        if (SY[k] < SKY_H - 34)                        // keep stars above the horizon line
+            lv_canvas_draw_rect(s_skyCanvas, SX[k], SY[k], 2, 2, &s);
+}
+// Phase-accurate moon: lit/dark split by an elliptical terminator from the
+// illuminated fraction (correct crescent AND gibbous), waxing lit on the right.
+static void sky_moon(int cx, int cy, int r, int idx, int pct) {
+    float f = pct / 100.0f; if (f < 0) f = 0; if (f > 1) f = 1;
+    float cosT = 1.0f - 2.0f * f;                       // +1 new .. -1 full
+    bool waxing = (idx >= 0 && idx <= 4);
+    const uint32_t lit = 0xeef2ff, dark = 0x1b2740;
+    for (int dy = -r; dy <= r; dy++) {
+        int w2 = r * r - dy * dy; if (w2 < 0) continue;
+        float w = sqrtf((float)w2);
+        float xt = cosT * w;                            // terminator x on this row
+        for (int dx = -r; dx <= r; dx++) {
+            if (dx * dx + dy * dy > r * r) continue;
+            int px = cx + dx, py = cy + dy;
+            if (px < 0 || px >= SKY_W || py < 0 || py >= SKY_H) continue;
+            bool isLit = waxing ? (dx >= xt) : (dx <= -xt);
+            lv_canvas_set_px_color(s_skyCanvas, px, py, lv_color_hex(isLit ? lit : dark));
+        }
+    }
 }
 static int sky_now_min() {
     time_t now = time(nullptr);
@@ -432,29 +490,53 @@ static void draw_sky(int nowMin) {
         lv_canvas_draw_line(s_skyCanvas, p, 2, &g);
     }
 
-    // Sun/moon travel an arc across the full sky width (the clock moved to the
-    // top bar, so the whole canvas is free).
-    const int ax0 = 20, ax1 = SKY_W - 20, baseY = SKY_H - 14, arcH = SKY_H - 42;
+    // Sun-path panel: a dotted daytime trajectory from the sunrise horizon to the
+    // sunset horizon, with the sun (day) or a phase-shaded moon (night) riding it.
+    const int ax0 = 42, ax1 = SKY_W - 42;
+    const int baseY = SKY_H - 30;                       // horizon (room for corner times)
+    const int arcH  = baseY - 16;                       // trajectory peak height
+
+    lv_draw_line_dsc_t hl; lv_draw_line_dsc_init(&hl);
+    hl.width = 1; hl.color = lv_color_hex(0x9fb0cc); hl.opa = LV_OPA_30;
+    lv_point_t hp[2] = {{8, (lv_coord_t)baseY}, {(lv_coord_t)(SKY_W - 8), (lv_coord_t)baseY}};
+    lv_canvas_draw_line(s_skyCanvas, hp, 2, &hl);
+
+    bool isDay = (sr >= 0 && ss >= 0 && nowMin >= sr && nowMin <= ss && ss > sr);
+    lv_draw_rect_dsc_t dd; lv_draw_rect_dsc_init(&dd);
+    dd.radius = LV_RADIUS_CIRCLE;
+    dd.bg_color = lv_color_hex(isDay ? 0xff9e3d : 0xffd27a);   // bold gold by day, soft by night
+    dd.bg_opa   = isDay ? LV_OPA_80 : LV_OPA_40;
+    int dsz = isDay ? 3 : 2;
+    for (int i = 0; i <= 40; i++) {
+        float fr = i / 40.0f;
+        int x = ax0 + (int)lroundf(fr * (ax1 - ax0));
+        int y = baseY - (int)lroundf(sinf(fr * 3.14159265f) * arcH);
+        lv_canvas_draw_rect(s_skyCanvas, x - dsz / 2, y - dsz / 2, dsz, dsz, &dd);
+    }
+    sky_disc(ax0, baseY, 3, 0xffd27a);                 // sunrise horizon marker
+    sky_disc(ax1, baseY, 3, 0xff9d5c);                 // sunset horizon marker
+
     if (sr >= 0 && ss >= 0 && nowMin >= sr && nowMin <= ss && ss > sr) {
         float fr = (float)(nowMin - sr) / (ss - sr);
         int dx = ax0 + (int)lroundf(fr * (ax1 - ax0));
         int dy = baseY - (int)lroundf(sinf(fr * 3.14159265f) * arcH);
-        sky_disc(dx, dy, 13, sky_mix(0xffe08a, 0x9aa3b2, cloudK));   // sun (dimmed if overcast)
+        sky_disc(dx, dy, 10, sky_mix(0xffe08a, 0x9aa3b2, cloudK));   // sun glow
+        sky_disc(dx, dy, 7,  sky_mix(0xfff2c4, 0xb8bfca, cloudK));   // sun core
     } else if (sr >= 0 && ss >= 0) {
         float fr = (nowMin > ss) ? (float)(nowMin - ss) / ((sr + 1440) - ss)
                                  : (float)(nowMin + 1440 - ss) / ((sr + 1440) - ss);
         int dx = ax0 + (int)lroundf(fr * (ax1 - ax0));
-        int dy = baseY - (int)lroundf(sinf(fr * 3.14159265f) * arcH * 0.8f);
+        int dy = baseY - (int)lroundf(sinf(fr * 3.14159265f) * arcH * 0.85f);
         sky_stars();
-        sky_disc(dx, dy, 11, 0xdfe6f0);                // moon
+        sky_moon(dx, dy, 11, s_moonIdx, s_moonPct);
     } else {
         sky_stars();
     }
 }
 
 static void build_home(lv_obj_t *pg) {
-    // Day/night sky gradient (top-left). The clock now lives in the global top bar,
-    // so the whole canvas is free for the sun/moon arc and starfield.
+    // Sun-path panel (top-left): day/night gradient with the sun/moon riding a
+    // dotted trajectory, sunrise/sunset times pinned to the horizons.
     static lv_color_t *skyBuf = nullptr;
     if (!skyBuf) skyBuf = (lv_color_t *)heap_caps_malloc(
         SKY_W * SKY_H * sizeof(lv_color_t), MALLOC_CAP_SPIRAM);
@@ -464,6 +546,28 @@ static void build_home(lv_obj_t *pg) {
     lv_obj_set_style_radius(s_skyCanvas, 10, 0);
     lv_obj_set_style_clip_corner(s_skyCanvas, true, 0);
     draw_sky(sky_now_min());
+
+    s_sunRiseLbl = lv_label_create(s_skyCanvas);
+    lv_label_set_text(s_sunRiseLbl, "--");
+    lv_obj_set_style_text_font(s_sunRiseLbl, &lv_font_montserrat_12, 0);
+    lv_obj_set_style_text_color(s_sunRiseLbl, lv_color_hex(0xffe0a8), 0);
+    lv_obj_set_style_bg_color(s_sunRiseLbl, lv_color_hex(0x05070e), 0);
+    lv_obj_set_style_bg_opa(s_sunRiseLbl, LV_OPA_40, 0);
+    lv_obj_set_style_pad_hor(s_sunRiseLbl, 5, 0);
+    lv_obj_set_style_pad_ver(s_sunRiseLbl, 1, 0);
+    lv_obj_set_style_radius(s_sunRiseLbl, 4, 0);
+    lv_obj_align(s_sunRiseLbl, LV_ALIGN_BOTTOM_LEFT, 6, -4);
+
+    s_sunSetLbl = lv_label_create(s_skyCanvas);
+    lv_label_set_text(s_sunSetLbl, "--");
+    lv_obj_set_style_text_font(s_sunSetLbl, &lv_font_montserrat_12, 0);
+    lv_obj_set_style_text_color(s_sunSetLbl, lv_color_hex(0xffc09a), 0);
+    lv_obj_set_style_bg_color(s_sunSetLbl, lv_color_hex(0x05070e), 0);
+    lv_obj_set_style_bg_opa(s_sunSetLbl, LV_OPA_40, 0);
+    lv_obj_set_style_pad_hor(s_sunSetLbl, 5, 0);
+    lv_obj_set_style_pad_ver(s_sunSetLbl, 1, 0);
+    lv_obj_set_style_radius(s_sunSetLbl, 4, 0);
+    lv_obj_align(s_sunSetLbl, LV_ALIGN_BOTTOM_RIGHT, -6, -4);
 
     // Current conditions (top-right): drawn icon + big temperature + details.
     static lv_color_t *wxBuf = nullptr;
@@ -485,15 +589,22 @@ static void build_home(lv_obj_t *pg) {
     lv_label_set_text(s_wxLoc, "");
     lv_obj_set_style_text_font(s_wxLoc, &lv_font_montserrat_16, 0);
     lv_obj_set_style_text_color(s_wxLoc, lv_color_hex(0x8b97b0), 0);
-    lv_obj_set_style_text_align(s_wxLoc, LV_TEXT_ALIGN_RIGHT, 0);
-    lv_obj_align(s_wxLoc, LV_ALIGN_TOP_RIGHT, 0, 74);
+    lv_obj_set_style_text_align(s_wxLoc, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_align(s_wxLoc, LV_ALIGN_TOP_MID, 303, 74);   // centered under temp + icon cluster
 
     s_weatherBody = lv_label_create(pg);
     lv_label_set_text(s_weatherBody, "Loading conditions...");
     lv_obj_set_style_text_font(s_weatherBody, &lv_font_montserrat_16, 0);
     lv_obj_set_style_text_color(s_weatherBody, lv_color_hex(0xcdd6ea), 0);
     lv_obj_set_style_text_align(s_weatherBody, LV_TEXT_ALIGN_RIGHT, 0);
-    lv_obj_align(s_weatherBody, LV_ALIGN_TOP_RIGHT, 0, 100);
+    lv_obj_align(s_weatherBody, LV_ALIGN_TOP_RIGHT, -158, 100);
+
+    s_wxDetail = lv_label_create(pg);                 // right column (feels-like + UV)
+    lv_label_set_text(s_wxDetail, "");
+    lv_obj_set_style_text_font(s_wxDetail, &lv_font_montserrat_16, 0);
+    lv_obj_set_style_text_color(s_wxDetail, lv_color_hex(0xcdd6ea), 0);
+    lv_obj_set_style_text_align(s_wxDetail, LV_TEXT_ALIGN_RIGHT, 0);
+    lv_obj_align(s_wxDetail, LV_ALIGN_TOP_RIGHT, 0, 100);
 
     // 5-day forecast strip (bottom): one card per day.
     const int CW    = LV_HOR_RES - SIDEBAR_W - 36;
@@ -533,24 +644,24 @@ static void build_home(lv_obj_t *pg) {
         lv_obj_align(s_fcTemp[i], LV_ALIGN_BOTTOM_MID, 0, 0);
     }
 
-    // --- Sun/moon summary + hourly strip (middle band, above the 5-day cards) ---
+    // --- Astro summary (daylight + live countdown, moon phase) + hourly strip ---
     s_sunLabel = lv_label_create(pg);
-    lv_label_set_text(s_sunLabel, "Sunrise --   Sunset --");
+    lv_label_set_text(s_sunLabel, "Daylight --");
     lv_obj_set_style_text_font(s_sunLabel, &lv_font_montserrat_14, 0);
     lv_obj_set_style_text_color(s_sunLabel, lv_color_hex(0xcdd6ea), 0);
-    lv_obj_align(s_sunLabel, LV_ALIGN_TOP_LEFT, 0, 154);
+    lv_obj_align(s_sunLabel, LV_ALIGN_TOP_LEFT, 0, 110);
 
     s_moonLabel = lv_label_create(pg);
-    lv_label_set_text(s_moonLabel, "Moon --");
+    lv_label_set_text(s_moonLabel, "Moon phase: --");
     lv_obj_set_style_text_font(s_moonLabel, &lv_font_montserrat_14, 0);
     lv_obj_set_style_text_color(s_moonLabel, lv_color_hex(0x8b97b0), 0);
-    lv_obj_align(s_moonLabel, LV_ALIGN_TOP_LEFT, 0, 176);
+    lv_obj_align(s_moonLabel, LV_ALIGN_TOP_LEFT, 0, 132);
 
     const int CWh  = LV_HOR_RES - SIDEBAR_W - 36;
     const int hgap = 4;
     const int hcW  = (CWh - hgap * (UI_HOURLY_N - 1)) / UI_HOURLY_N;
-    const int hcH  = 80;
-    const int hcY  = 198;
+    const int hcH  = 98;
+    const int hcY  = 162;
     for (int i = 0; i < UI_HOURLY_N; i++) {
         lv_obj_t *c = lv_obj_create(pg);
         lv_obj_set_size(c, hcW, hcH);
@@ -1189,9 +1300,15 @@ static void build_topbar(lv_obj_t *scr) {
     update_topbar_wifi();
 }
 
+// Defer the page switch briefly so the tile's release glow is visible before we navigate.
+static void launcher_nav_cb(lv_timer_t *t) {
+    ui_show_page((Page)(intptr_t)t->user_data);
+}
+
 static void launcher_tile_cb(lv_event_t *e) {
     Page p = (Page)(intptr_t)lv_event_get_user_data(e);
-    ui_show_page(p);
+    lv_timer_t *t = lv_timer_create(launcher_nav_cb, 160, (void *)(intptr_t)p);
+    lv_timer_set_repeat_count(t, 1);
 }
 
 // Home tile grid: one tile per panel (everything except the launcher itself).
@@ -1202,11 +1319,37 @@ static void build_launcher(lv_obj_t *pg) {
     lv_obj_set_style_pad_column(pg, 16, 0);
     lv_obj_clear_flag(pg, LV_OBJ_FLAG_SCROLLABLE);
 
+    // Shared tile styles: darken + accent outline glow on press, eased for a tactile feel.
+    // (Avoids transform_zoom, which renders blank on this full-refresh RGB panel.)
+    // Fast ramp-up on press, slow fade-out on release so the glow lingers into the nav.
+    static lv_style_t s_tileDef, s_tilePr;
+    static lv_style_transition_dsc_t s_tileTrIn, s_tileTrOut;
+    static bool s_tileStyleInit = false;
+    if (!s_tileStyleInit) {
+        static const lv_style_prop_t props[] = { LV_STYLE_BG_COLOR, LV_STYLE_OUTLINE_WIDTH,
+                                                 LV_STYLE_OUTLINE_OPA, LV_STYLE_PROP_INV };
+        lv_style_transition_dsc_init(&s_tileTrIn,  props, lv_anim_path_ease_out,  80, 0, NULL);
+        lv_style_transition_dsc_init(&s_tileTrOut, props, lv_anim_path_ease_out, 320, 0, NULL);
+        lv_style_init(&s_tileDef);
+        lv_style_set_bg_color(&s_tileDef, lv_color_hex(0x161d2e));
+        lv_style_set_outline_color(&s_tileDef, lv_color_hex(0x7fb0ff));
+        lv_style_set_outline_width(&s_tileDef, 0);
+        lv_style_set_outline_opa(&s_tileDef, LV_OPA_TRANSP);
+        lv_style_set_outline_pad(&s_tileDef, 0);
+        lv_style_set_transition(&s_tileDef, &s_tileTrOut);   // fade-out on release
+        lv_style_init(&s_tilePr);
+        lv_style_set_bg_color(&s_tilePr, lv_color_hex(0x24406a));
+        lv_style_set_outline_width(&s_tilePr, 3);
+        lv_style_set_outline_opa(&s_tilePr, LV_OPA_COVER);
+        lv_style_set_transition(&s_tilePr, &s_tileTrIn);     // quick light-up on press
+        s_tileStyleInit = true;
+    }
+
     for (int p = PAGE_LAUNCHER + 1; p < PAGE_COUNT; p++) {
         lv_obj_t *tile = lv_obj_create(pg);
         lv_obj_set_size(tile, 168, 132);
-        lv_obj_set_style_bg_color(tile, lv_color_hex(0x161d2e), 0);
-        lv_obj_set_style_bg_color(tile, lv_color_hex(0x24406a), LV_STATE_PRESSED);
+        lv_obj_add_style(tile, &s_tileDef, 0);
+        lv_obj_add_style(tile, &s_tilePr, LV_STATE_PRESSED);
         lv_obj_set_style_border_width(tile, 0, 0);
         lv_obj_set_style_radius(tile, 12, 0);
         lv_obj_clear_flag(tile, LV_OBJ_FLAG_SCROLLABLE);
@@ -1256,6 +1399,8 @@ static void build_photo(lv_obj_t *pg) {
 
 void ui_photo_refresh(bool ok, const char *status) {
     if (!s_photoCanvas) return;
+    s_photoHave = true;
+    page_set_loading(PAGE_PHOTO, false);
     if (ok) {
         if (s_photoStatus) lv_obj_add_flag(s_photoStatus, LV_OBJ_FLAG_HIDDEN);
         lv_obj_invalidate(s_photoCanvas);
@@ -2003,6 +2148,7 @@ static lv_obj_t *make_stat_bar(lv_obj_t *pg, const char *name, int x, int y, lv_
     lv_obj_set_style_bg_color(bar, lv_color_hex(0x2a3550), LV_PART_MAIN);
     lv_obj_set_style_radius(bar, 6, LV_PART_MAIN);
     lv_obj_set_style_radius(bar, 6, LV_PART_INDICATOR);
+    lv_obj_set_style_anim_time(bar, 400, 0);           // ease fill changes
     lv_bar_set_range(bar, 0, 100);
     lv_bar_set_value(bar, 0, LV_ANIM_OFF);
 
@@ -2019,7 +2165,7 @@ static lv_obj_t *make_stat_bar(lv_obj_t *pg, const char *name, int x, int y, lv_
 static void set_stat_bar(lv_obj_t *bar, lv_obj_t *val, int pct, const char *txt) {
     if (!bar) return;
     if (pct < 0) pct = 0; if (pct > 100) pct = 100;
-    lv_bar_set_value(bar, pct, LV_ANIM_OFF);
+    lv_bar_set_value(bar, pct, LV_ANIM_ON);
     uint32_t c = pct < 70 ? 0x39d98a : (pct < 85 ? 0xffb347 : 0xff5c5c);
     lv_obj_set_style_bg_color(bar, lv_color_hex(c), LV_PART_INDICATOR);
     if (val) lv_label_set_text(val, txt);
@@ -2164,6 +2310,21 @@ void ui_init() {
     build_diag(s_pages[PAGE_DIAG]);
     build_config(s_pages[PAGE_CONFIG]);
 
+    // A hidden accent-colored loading spinner centered on each data page.
+    const Page dataPages[] = { PAGE_WEATHER, PAGE_FLIGHTS, PAGE_CALENDAR,
+                               PAGE_TICKERS, PAGE_AIR, PAGE_PHOTO };
+    for (Page p : dataPages) {
+        lv_obj_t *sp = lv_spinner_create(s_pages[p], 700, 60);   // 0.7s/rev, 60deg arc
+        lv_obj_set_size(sp, 56, 56);
+        lv_obj_center(sp);
+        lv_obj_set_style_arc_width(sp, 5, LV_PART_MAIN);
+        lv_obj_set_style_arc_width(sp, 5, LV_PART_INDICATOR);
+        lv_obj_set_style_arc_color(sp, lv_color_hex(0x263041), LV_PART_MAIN);
+        lv_obj_set_style_arc_color(sp, lv_color_hex(0x7fb0ff), LV_PART_INDICATOR);
+        lv_obj_add_flag(sp, LV_OBJ_FLAG_HIDDEN);
+        s_pageSpin[p] = sp;
+    }
+
     // Restore the last-selected panel (first boot / bad value -> launcher).
     Page start = (Page)settings().lastPanel;
     if (start <= PAGE_LAUNCHER || start >= PAGE_COUNT) start = PAGE_LAUNCHER;
@@ -2229,6 +2390,8 @@ static void update_cal_hero() {
                                 lv_color_hex(diff < 600 ? 0xffd166 : 0x9fd0ff), 0);
 }
 
+static void update_sun_labels();
+
 static void update_clock() {
     time_t now = time(nullptr);
     if (now < 100000) return;   // not synced yet
@@ -2243,6 +2406,7 @@ static void update_clock() {
     lv_label_set_text(s_clockDate, dbuf);
     topbar_relayout();
     draw_sky(t.tm_hour * 60 + t.tm_min);
+    update_sun_labels();
 }
 
 static void update_config_page() {
@@ -2407,9 +2571,30 @@ void ui_tick() {
 // ---------------------------------------------------------------------------
 // Data push hooks
 // ---------------------------------------------------------------------------
-void ui_weather_set(int code, const String &summary, float tempC, int humidity, float windKph) {
+// Recompose the two-column conditions block: left column = summary/humidity/wind,
+// right column = feels-like + UV. Same font so the columns read as one block.
+static void compose_wx_body() {
+    if (s_weatherBody) {
+        char b[128];
+        snprintf(b, sizeof(b), "%s\nHumidity %d%%\nWind %.0f mph",
+                 s_wxSummary.c_str(), s_wxHum, s_wxWindMph);
+        lv_label_set_text(s_weatherBody, b);
+    }
+    if (s_wxDetail) {
+        char d[96]; int n = 0;
+        if (s_wxFeelsF > -999.0f)
+            n += snprintf(d + n, sizeof(d) - n, "Feels like %.0fF", s_wxFeelsF);
+        if (s_wxUvIdx >= 0) {
+            const char *band = s_wxUvIdx < 3 ? "Low" : s_wxUvIdx < 6 ? "Moderate"
+                             : s_wxUvIdx < 8 ? "High" : s_wxUvIdx < 11 ? "Very High" : "Extreme";
+            snprintf(d + n, sizeof(d) - n, "%sUV %.0f %s", n ? "\n" : "", s_wxUvIdx, band);
+        }
+        lv_label_set_text(s_wxDetail, d);
+    }
+}
+
+void ui_weather_set(int code, const String &summary, float tempC, int humidity, float windKph, float feelsC) {
     float temp = tempC * 9.0f / 5.0f + 32.0f;
-    float wind = windKph * 0.621371f;
     if (s_wxTemp) {
         char t[16]; snprintf(t, sizeof(t), "%.0fF", temp);
         lv_label_set_text(s_wxTemp, t);
@@ -2424,20 +2609,26 @@ void ui_weather_set(int code, const String &summary, float tempC, int humidity, 
             lv_label_set_text(s_wxLoc, l);
         }
     }
-    if (s_weatherBody) {
-        char b[128];
-        snprintf(b, sizeof(b), "%s\nHumidity %d%%\nWind %.0f mph",
-                 summary.c_str(), humidity, wind);
-        lv_label_set_text(s_weatherBody, b);
-    }
+    s_wxSummary = summary;
+    s_wxHum     = humidity;
+    s_wxWindMph = windKph * 0.621371f;
+    s_wxFeelsF  = feelsC * 9.0f / 5.0f + 32.0f;
+    compose_wx_body();
     s_wxCode = code;
     s_wxHave = true;                                   // enable offline last-good (#1)
+    page_set_loading(PAGE_WEATHER, false);
     animate_weather();
 }
 
 void ui_weather_error(const String &msg) {
+    page_set_loading(PAGE_WEATHER, false);
     if (s_wxHave) return;                               // keep last-good conditions when offline (#1)
     if (s_weatherBody) lv_label_set_text(s_weatherBody, msg.c_str());
+}
+
+void ui_weather_uv_set(float uvIndex) {
+    s_wxUvIdx = uvIndex;
+    compose_wx_body();
 }
 
 void ui_forecast_set(DayForecast *days, int count) {
@@ -2692,12 +2883,14 @@ void ui_flights_set(FlightRow *rows, int count) {
         lv_obj_set_style_text_color(s_flightsStatus, lv_color_hex(0x8b97b0), 0);
     }
     s_flightsHave = true;                              // enable offline last-good (#1)
+    page_set_loading(PAGE_FLIGHTS, false);
 
     draw_radar();
     update_flight_hero();
 }
 
 void ui_flights_error(const String &msg) {
+    page_set_loading(PAGE_FLIGHTS, false);
     if (s_flightsHave) {                               // keep radar/table; just flag staleness (#1)
         if (s_flightsStatus) {
             char st[80]; snprintf(st, sizeof(st), "%s  (offline - last update)", msg.c_str());
@@ -2766,9 +2959,12 @@ void ui_tickers_set(TickerRow *rows, int count) {
     char st[64];
     snprintf(st, sizeof(st), "%d/%d quotes  %s  Yahoo", ok, count, TF_LABELS[s_tfIndex]);
     lv_label_set_text(s_tickersStatus, st);
+    s_tickersHave = true;
+    page_set_loading(PAGE_TICKERS, false);
 }
 
 void ui_tickers_error(const String &msg) {
+    page_set_loading(PAGE_TICKERS, false);
     if (s_tickersStatus) lv_label_set_text(s_tickersStatus, msg.c_str());
 }
 
@@ -2778,10 +2974,13 @@ void ui_calendar_set(CalEvent *events, int count) {
     s_calAllCount = count;
     for (int i = 0; i < count; i++) s_calAll[i] = events[i];
     if (s_calCard) lv_obj_add_flag(s_calCard, LV_OBJ_FLAG_HIDDEN);   // avoid a stale popup
+    s_calHave = true;
+    page_set_loading(PAGE_CALENDAR, false);
     cal_render();
 }
 
 void ui_calendar_error(const String &msg) {
+    page_set_loading(PAGE_CALENDAR, false);
     for (int i = 0; i < UI_MAX_EVENTS; i++)
         if (s_calRow[i]) lv_obj_add_flag(s_calRow[i], LV_OBJ_FLAG_HIDDEN);
     s_calAllCount = 0;
@@ -2794,11 +2993,50 @@ void ui_calendar_error(const String &msg) {
                        lv_label_set_text(s_calStatus, msg.c_str()); }
 }
 
+// Ease an arc's indicator from its current value to a target for a smooth sweep.
+static void arc_set_value_cb(void *arc, int32_t v) { lv_arc_set_value((lv_obj_t *)arc, (int16_t)v); }
+static void anim_arc_to(lv_obj_t *arc, int target) {
+    if (!arc) return;
+    int cur = lv_arc_get_value(arc);
+    if (cur == target) return;
+    lv_anim_t a; lv_anim_init(&a);
+    lv_anim_set_var(&a, arc);
+    lv_anim_set_exec_cb(&a, arc_set_value_cb);
+    lv_anim_set_values(&a, cur, target);
+    lv_anim_set_time(&a, 500);
+    lv_anim_set_path_cb(&a, lv_anim_path_ease_out);
+    lv_anim_start(&a);
+}
+
+// Re-sweep an arc/bar from zero to its current value (for a reveal on panel focus).
+static void arc_replay(lv_obj_t *arc) {
+    if (!arc) return;
+    int target = lv_arc_get_value(arc);
+    lv_arc_set_value(arc, 0);
+    anim_arc_to(arc, target);
+}
+static void bar_replay(lv_obj_t *bar) {
+    if (!bar) return;
+    int target = lv_bar_get_value(bar);
+    lv_bar_set_value(bar, 0, LV_ANIM_OFF);
+    lv_bar_set_value(bar, target, LV_ANIM_ON);
+}
+static void replay_page_anims(Page p) {
+    if (p == PAGE_AIR) {
+        arc_replay(s_airAqiArc);
+        arc_replay(s_airUvArc);
+    } else if (p == PAGE_DIAG) {
+        bar_replay(s_diagRamBar);
+        bar_replay(s_diagPsramBar);
+        bar_replay(s_diagFlashBar);
+    }
+}
+
 void ui_air_set(int usAqi, float pm25, float pm10, float o3, float no2) {
     int band = aqi_band(usAqi);
     if (s_airAqiArc) {
         int v = usAqi; if (v < 0) v = 0; if (v > 300) v = 300;
-        lv_arc_set_value(s_airAqiArc, v);
+        anim_arc_to(s_airAqiArc, v);
         lv_obj_set_style_arc_color(s_airAqiArc, lv_color_hex(AQI_COLORS[band]), LV_PART_INDICATOR);
     }
     if (s_airAqi) {
@@ -2825,9 +3063,11 @@ void ui_air_set(int usAqi, float pm25, float pm10, float o3, float no2) {
         lv_obj_set_style_text_color(s_airStatus, lv_color_hex(0x8b97b0), 0);
     }
     s_airHave = true;                                  // enable offline last-good (#1)
+    page_set_loading(PAGE_AIR, false);
 }
 
 void ui_air_error(const String &msg) {
+    page_set_loading(PAGE_AIR, false);
     if (s_airHave) {                                   // keep gauges/values; flag staleness (#1)
         if (s_airStatus) {
             char st[80]; snprintf(st, sizeof(st), "%s  (offline - last update)", msg.c_str());
@@ -2848,7 +3088,7 @@ void ui_air_uv_set(float uvIndex) {
     else                   col = 0x8f3f97;   // extreme
     if (s_airUvArc) {
         int v = (int)lroundf(uvIndex); if (v < 0) v = 0; if (v > 12) v = 12;
-        lv_arc_set_value(s_airUvArc, v);
+        anim_arc_to(s_airUvArc, v);
         lv_obj_set_style_arc_color(s_airUvArc, lv_color_hex(col), LV_PART_INDICATOR);
     }
     if (s_airUv) {
@@ -2872,22 +3112,44 @@ static const char *MOON_NAMES[8] = {
     "New", "Waxing Crescent", "First Quarter", "Waxing Gibbous",
     "Full", "Waning Gibbous", "Last Quarter", "Waning Crescent" };
 
+// Refresh the sun-path corner times, the daylight length + live next-event
+// countdown, and the moon phase caption from the last sun poll + current time.
+static void update_sun_labels() {
+    if (s_srMin < 0 || s_ssMin < 0) return;
+    char sr[12], ss[12];
+    fmt_hm(s_srMin, sr, sizeof(sr));
+    fmt_hm(s_ssMin, ss, sizeof(ss));
+    if (s_sunRiseLbl) lv_label_set_text(s_sunRiseLbl, sr);
+    if (s_sunSetLbl)  lv_label_set_text(s_sunSetLbl, ss);
+
+    int dl = s_ssMin - s_srMin; if (dl < 0) dl += 1440;
+    int now = sky_now_min();
+    char line[72];
+    if (now >= 0) {
+        const char *evt; int mins;
+        if      (now < s_srMin) { evt = "Sunrise in"; mins = s_srMin - now; }
+        else if (now < s_ssMin) { evt = "Sunset in";  mins = s_ssMin - now; }
+        else                    { evt = "Sunrise in"; mins = (s_srMin + 1440) - now; }
+        snprintf(line, sizeof(line), "Daylight %dh %02dm   -   %s %dh %02dm",
+                 dl / 60, dl % 60, evt, mins / 60, mins % 60);
+    } else {
+        snprintf(line, sizeof(line), "Daylight %dh %02dm", dl / 60, dl % 60);
+    }
+    if (s_sunLabel) lv_label_set_text(s_sunLabel, line);
+
+    if (s_moonLabel) {
+        int idx = s_moonIdx; if (idx < 0 || idx > 7) idx = 0;
+        char mb[64];
+        snprintf(mb, sizeof(mb), "Moon phase: %s   -   %d%% illuminated", MOON_NAMES[idx], s_moonPct);
+        lv_label_set_text(s_moonLabel, mb);
+    }
+}
+
 void ui_sun_set(int sunriseMin, int sunsetMin, int moonIdx, int illumPct) {
     s_srMin = sunriseMin; s_ssMin = sunsetMin;
+    s_moonIdx = moonIdx; s_moonPct = illumPct;
     draw_sky(sky_now_min());
-    if (s_sunLabel) {
-        char sr[12], ss[12], b[48];
-        fmt_hm(sunriseMin, sr, sizeof(sr));
-        fmt_hm(sunsetMin,  ss, sizeof(ss));
-        snprintf(b, sizeof(b), "Sunrise %s   Sunset %s", sr, ss);
-        lv_label_set_text(s_sunLabel, b);
-    }
-    if (s_moonLabel) {
-        if (moonIdx < 0 || moonIdx > 7) moonIdx = 0;
-        char b[48];
-        snprintf(b, sizeof(b), "Moon: %s (%d%%)", MOON_NAMES[moonIdx], illumPct);
-        lv_label_set_text(s_moonLabel, b);
-    }
+    update_sun_labels();
 }
 
 void ui_hourly_set(HourCell *cells, int count) {

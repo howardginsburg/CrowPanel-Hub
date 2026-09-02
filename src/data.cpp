@@ -124,7 +124,7 @@ static void poll_weather() {
     char url[512];
     snprintf(url, sizeof(url),
         "https://api.open-meteo.com/v1/forecast?latitude=%.4f&longitude=%.4f"
-        "&current=temperature_2m,relative_humidity_2m,wind_speed_10m,weather_code"
+        "&current=temperature_2m,relative_humidity_2m,apparent_temperature,wind_speed_10m,weather_code"
         "&daily=weather_code,temperature_2m_max,temperature_2m_min,sunrise,sunset,uv_index_max"
         "&hourly=temperature_2m,precipitation_probability"
         "&forecast_days=5&forecast_hours=12&timezone=auto",
@@ -163,9 +163,10 @@ static void poll_weather() {
     int   h   = cur["relative_humidity_2m"] | 0;
     float w   = cur["wind_speed_10m"] | 0.0f;
     int   code= cur["weather_code"] | 0;
+    float feels = cur["apparent_temperature"] | t;
     Serial.printf("[weather] OK  %.1fC  hum %d%%  off=%ld\n", t, h,
                   doc["utc_offset_seconds"].as<long>());
-    ui_weather_set(code, weather_summary(code), t, h, w);
+    ui_weather_set(code, weather_summary(code), t, h, w, feels);
 
     // 5-day forecast strip.
     JsonObject daily = doc["daily"];
@@ -189,7 +190,7 @@ static void poll_weather() {
         float uvMax = daily["uv_index_max"][0] | -1.0f;
         int   moonIdx, moonPct; moon_phase(time(nullptr), moonIdx, moonPct);
         ui_sun_set(srMin, ssMin, moonIdx, moonPct);
-        if (uvMax >= 0) ui_air_uv_set(uvMax);
+        if (uvMax >= 0) { ui_air_uv_set(uvMax); ui_weather_uv_set(uvMax); }
         Serial.printf("[weather] sun %d..%d min  uvMax=%.1f  moon=%d/%d%%\n",
                       srMin, ssMin, uvMax, moonIdx, moonPct);
     }
@@ -895,6 +896,18 @@ void data_tick() {
     if (net_state() != NetState::Connected) return;
     if (!s_timeStarted) data_begin_time();
 
+    // Prime weather once on connect, regardless of the active tab: the clock's
+    // UTC offset and the day's max UV both come only from poll_weather, so a
+    // user who lands on Air/Diag first would otherwise see UTC time and no UV.
+    // Retry on a slow cadence until the offset lands, then never run again.
+    static uint32_t s_primeLastMs = 0;
+    if (s_utcOffset == 0x7fffffff &&
+        (s_primeLastMs == 0 || millis() - s_primeLastMs >= 15000UL)) {
+        s_primeLastMs = millis();
+        poll_weather();
+        s_poll[PAGE_WEATHER].lastMs = millis();
+    }
+
     // Out-of-band one-off refreshes (radar zoom / ticker timeframe changed).
     // These only fire while their page is visible, so poll now and reset that
     // page's cadence so the generic timer below doesn't double-fetch.
@@ -903,20 +916,29 @@ void data_tick() {
 
     // Poll only the source behind the focused tab. A tab change forces an
     // immediate sync; otherwise it refreshes on the configured cadence.
+    static uint32_t s_focusMs = 0;
     Page active = ui_active_page();
     if (active != s_lastActivePage) {
         s_lastActivePage = active;
         s_poll[active].lastMs = 0;   // sync-on-focus
+        s_focusMs = millis();        // start a brief grace so a loading spinner can spin
     }
+
+    // The poll below blocks the loop (and thus LVGL) for the whole fetch, so a
+    // just-focused page's loading spinner can't animate while it runs. Hold the
+    // first poll off for a moment so the spinner gets free frames to spin first.
+    const uint32_t FOCUS_GRACE_MS = 550;
+    bool inGrace = (millis() - s_focusMs < FOCUS_GRACE_MS);
 
     PagePoll &pp = s_poll[active];
     if (!pp.poll) return;                             // DIAG / CONFIG: nothing
-    if (active == PAGE_CALENDAR) { poll_calendar_gate(pp); return; }
+    if (active == PAGE_CALENDAR) { if (!inGrace) poll_calendar_gate(pp); return; }
 
     uint32_t interval = (uint32_t)settings().pollSeconds * 1000UL;
     if (active == PAGE_FLIGHTS && interval > 10000UL) interval = 10000UL;   // live radar refreshes faster
     if (active == PAGE_PHOTO) interval = (uint32_t)settings().photoSeconds * 1000UL;   // photo rotate cadence
     if (pp.lastMs == 0 || millis() - pp.lastMs >= interval) {
+        if (inGrace) return;        // let the spinner animate before we block on the fetch
         pp.poll();
         pp.lastMs = millis();   // count the cadence from completion, so a slow
                                 // poll can't immediately re-trigger itself

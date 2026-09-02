@@ -29,8 +29,9 @@ void ui_show_page(Page p);
 Page ui_active_page();
 
 // ---- Data push hooks (called by the data layer when fresh values arrive) ----
-void ui_weather_set(int code, const String &summary, float tempC, int humidity, float windKph);
+void ui_weather_set(int code, const String &summary, float tempC, int humidity, float windKph, float feelsC);
 void ui_weather_error(const String &msg);
+void ui_weather_uv_set(float uvIndex);
 
 #define UI_FORECAST_DAYS 5
 struct DayForecast { int code; float hiC; float loC; };
