@@ -31,6 +31,11 @@ void setup() {
     net_begin();
     web_portal_begin();
 
+    // Blocking HTTPS fetches now run on their own core-0 task so they never
+    // stall the LVGL render loop. Start it after ui_init() (the LVGL mutex must
+    // exist before any setter fires).
+    data_task_start();
+
     Serial.println("[boot] ready");
 }
 
@@ -44,8 +49,12 @@ void loop() {
         ESP.restart();
     }
 
-    data_tick();
+    // Data fetching runs on the core-0 net task now (see data_task_start()).
+    // The render side owns LVGL under the shared mutex so it can't race the
+    // net task's ui_* setters.
+    ui_lock();
     ui_tick();
     display_tick();
+    ui_unlock();
     delay(5);
 }

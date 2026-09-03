@@ -12,6 +12,17 @@
 #include <WiFi.h>
 #include <esp_system.h>
 #include <esp_heap_caps.h>
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
+
+// LVGL is single-threaded. The network task (data.cpp, core 0) and the loop /
+// render task (core 1) both mutate widgets, so all LVGL access is serialized
+// through this recursive mutex. ui_lock/ui_unlock guard the loop side; the RAII
+// UiLock guards each data-push setter below.
+static SemaphoreHandle_t s_lvglMutex = nullptr;
+void ui_lock()   { if (s_lvglMutex) xSemaphoreTakeRecursive(s_lvglMutex, portMAX_DELAY); }
+void ui_unlock() { if (s_lvglMutex) xSemaphoreGiveRecursive(s_lvglMutex); }
+namespace { struct UiLock { UiLock() { ui_lock(); } ~UiLock() { ui_unlock(); } }; }
 
 #define DEG2RAD 0.017453292519943295f
 
@@ -516,8 +527,10 @@ static void draw_sky(int nowMin) {
         int y = baseY - (int)lroundf(sinf(fr * 3.14159265f) * arcH);
         lv_canvas_draw_rect(s_skyCanvas, x - dsz / 2, y - dsz / 2, dsz, dsz, &dd);
     }
-    sky_disc(ax0, baseY, 3, 0xffd27a);                 // sunrise horizon marker
-    sky_disc(ax1, baseY, 3, 0xff9d5c);                 // sunset horizon marker
+    // Left = current leg's start horizon, right = its end: sunrise->sunset by
+    // day, sunset->sunrise by night (matches the body's left-to-right travel).
+    sky_disc(ax0, baseY, 3, isDay ? 0xffd27a : 0xff9d5c);
+    sky_disc(ax1, baseY, 3, isDay ? 0xff9d5c : 0xffd27a);
 
     if (sr >= 0 && ss >= 0 && nowMin >= sr && nowMin <= ss && ss > sr) {
         float fr = (float)(nowMin - sr) / (ss - sr);
@@ -1419,6 +1432,7 @@ static void build_photo(lv_obj_t *pg) {
 }
 
 void ui_photo_refresh(bool ok, const char *status) {
+    UiLock _lk;
     if (!s_photoCanvas) return;
     s_photoHave = true;
     page_set_loading(PAGE_PHOTO, false);
@@ -2314,6 +2328,7 @@ static void build_diag(lv_obj_t *pg) {
 }
 
 void ui_init() {
+    if (!s_lvglMutex) s_lvglMutex = xSemaphoreCreateRecursiveMutex();
     lv_obj_t *scr = lv_scr_act();
     lv_obj_set_style_bg_color(scr, lv_color_hex(0x0f1420), 0);
     lv_obj_clear_flag(scr, LV_OBJ_FLAG_SCROLLABLE);
@@ -2621,6 +2636,7 @@ static void compose_wx_body() {
 }
 
 void ui_weather_set(int code, const String &summary, float tempC, int humidity, float windKph, float feelsC) {
+    UiLock _lk;
     float temp = tempC * 9.0f / 5.0f + 32.0f;
     if (s_wxTemp) {
         char t[16]; snprintf(t, sizeof(t), "%.0fF", temp);
@@ -2649,17 +2665,20 @@ void ui_weather_set(int code, const String &summary, float tempC, int humidity, 
 }
 
 void ui_weather_error(const String &msg) {
+    UiLock _lk;
     page_set_loading(PAGE_WEATHER, false);
     if (s_wxHave) return;                               // keep last-good conditions when offline (#1)
     if (s_wxCond) lv_label_set_text(s_wxCond, msg.c_str());
 }
 
 void ui_weather_uv_set(float uvIndex) {
+    UiLock _lk;
     s_wxUvIdx = uvIndex;
     compose_wx_body();
 }
 
 void ui_forecast_set(DayForecast *days, int count) {
+    UiLock _lk;
     if (count > UI_FORECAST_DAYS) count = UI_FORECAST_DAYS;
     s_forecastCount = count;
     for (int i = 0; i < count; i++) s_forecast[i] = days[i];
@@ -2847,6 +2866,7 @@ static void draw_radar() {
 }
 
 void ui_flights_set(FlightRow *rows, int count) {
+    UiLock _lk;
     if (count > UI_MAX_FLIGHTS) count = UI_MAX_FLIGHTS;
     s_flightCount = count;
     for (int i = 0; i < count; i++) s_flightRows[i] = rows[i];
@@ -2918,6 +2938,7 @@ void ui_flights_set(FlightRow *rows, int count) {
 }
 
 void ui_flights_error(const String &msg) {
+    UiLock _lk;
     page_set_loading(PAGE_FLIGHTS, false);
     if (s_flightsHave) {                               // keep radar/table; just flag staleness (#1)
         if (s_flightsStatus) {
@@ -2931,6 +2952,7 @@ void ui_flights_error(const String &msg) {
 }
 
 void ui_tickers_set(TickerRow *rows, int count) {
+    UiLock _lk;
     if (!s_tkList) return;
     if (count > 8) count = 8;
     int ok = 0;
@@ -2992,11 +3014,13 @@ void ui_tickers_set(TickerRow *rows, int count) {
 }
 
 void ui_tickers_error(const String &msg) {
+    UiLock _lk;
     page_set_loading(PAGE_TICKERS, false);
     if (s_tickersStatus) lv_label_set_text(s_tickersStatus, msg.c_str());
 }
 
 void ui_calendar_set(CalEvent *events, int count) {
+    UiLock _lk;
     if (!s_calList) return;
     if (count > CAL_CACHE_N) count = CAL_CACHE_N;
     s_calAllCount = count;
@@ -3008,6 +3032,7 @@ void ui_calendar_set(CalEvent *events, int count) {
 }
 
 void ui_calendar_error(const String &msg) {
+    UiLock _lk;
     page_set_loading(PAGE_CALENDAR, false);
     for (int i = 0; i < UI_MAX_EVENTS; i++)
         if (s_calRow[i]) lv_obj_add_flag(s_calRow[i], LV_OBJ_FLAG_HIDDEN);
@@ -3061,6 +3086,7 @@ static void replay_page_anims(Page p) {
 }
 
 void ui_air_set(int usAqi, float pm25, float pm10, float o3, float no2) {
+    UiLock _lk;
     int band = aqi_band(usAqi);
     if (s_airAqiArc) {
         int v = usAqi; if (v < 0) v = 0; if (v > 300) v = 300;
@@ -3095,6 +3121,7 @@ void ui_air_set(int usAqi, float pm25, float pm10, float o3, float no2) {
 }
 
 void ui_air_error(const String &msg) {
+    UiLock _lk;
     page_set_loading(PAGE_AIR, false);
     if (s_airHave) {                                   // keep gauges/values; flag staleness (#1)
         if (s_airStatus) {
@@ -3108,6 +3135,7 @@ void ui_air_error(const String &msg) {
 }
 
 void ui_air_uv_set(float uvIndex) {
+    UiLock _lk;
     uint32_t col;
     if      (uvIndex < 3)  col = 0x00e400;   // low
     else if (uvIndex < 6)  col = 0xffff00;   // moderate
@@ -3147,11 +3175,22 @@ static void update_sun_labels() {
     char sr[12], ss[12];
     fmt_hm(s_srMin, sr, sizeof(sr));
     fmt_hm(s_ssMin, ss, sizeof(ss));
-    if (s_sunRiseLbl) lv_label_set_text(s_sunRiseLbl, sr);
-    if (s_sunSetLbl)  lv_label_set_text(s_sunSetLbl, ss);
 
     int dl = s_ssMin - s_srMin; if (dl < 0) dl += 1440;
     int now = sky_now_min();
+
+    // Corner times track the leg currently on the arc: sunrise (left) -> sunset
+    // (right) by day, sunset (left) -> next sunrise (right) by night.
+    bool isDay = (now >= 0 && now >= s_srMin && now <= s_ssMin && s_ssMin > s_srMin);
+    if (s_sunRiseLbl) {
+        lv_label_set_text(s_sunRiseLbl, isDay ? sr : ss);
+        lv_obj_set_style_text_color(s_sunRiseLbl, lv_color_hex(isDay ? 0xffe0a8 : 0xffc09a), 0);
+    }
+    if (s_sunSetLbl) {
+        lv_label_set_text(s_sunSetLbl, isDay ? ss : sr);
+        lv_obj_set_style_text_color(s_sunSetLbl, lv_color_hex(isDay ? 0xffc09a : 0xffe0a8), 0);
+    }
+
     char line[72];
     if (now >= 0) {
         const char *evt; int mins;
@@ -3174,6 +3213,7 @@ static void update_sun_labels() {
 }
 
 void ui_sun_set(int sunriseMin, int sunsetMin, int moonIdx, int illumPct) {
+    UiLock _lk;
     s_srMin = sunriseMin; s_ssMin = sunsetMin;
     s_moonIdx = moonIdx; s_moonPct = illumPct;
     draw_sky(sky_now_min());
@@ -3181,6 +3221,7 @@ void ui_sun_set(int sunriseMin, int sunsetMin, int moonIdx, int illumPct) {
 }
 
 void ui_hourly_set(HourCell *cells, int count) {
+    UiLock _lk;
     if (count > UI_HOURLY_N) count = UI_HOURLY_N;
     for (int i = 0; i < UI_HOURLY_N; i++) {
         if (!s_hrCell[i]) continue;

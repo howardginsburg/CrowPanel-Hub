@@ -9,6 +9,10 @@ void data_begin_time();
 // self-throttles and no-ops when offline.
 void data_tick();
 
+// Start the background network task (runs data_tick on core 0 so blocking HTTPS
+// fetches never stall the LVGL render loop). Call once after net_begin().
+void data_task_start();
+
 // Request a one-off flights refresh on the next loop tick (e.g. after a zoom
 // change) without waiting for the normal poll cadence.
 void data_request_flights();

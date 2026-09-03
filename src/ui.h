@@ -19,6 +19,13 @@ enum Page {
 // Build the whole UI. Call once after display_init().
 void ui_init();
 
+// LVGL is not thread-safe. The network task and the render/loop task both touch
+// widgets, so every LVGL access is serialized through a recursive mutex. The
+// loop wraps ui_tick()+display_tick() in ui_lock()/ui_unlock(); the data-push
+// hooks below lock themselves.
+void ui_lock();
+void ui_unlock();
+
 // Periodic UI housekeeping (clock, weather animation, live Diag/Calendar values). Cheap.
 void ui_tick();
 

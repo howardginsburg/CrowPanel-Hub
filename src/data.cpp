@@ -12,6 +12,8 @@
 #include <ArduinoJson.h>
 #include <math.h>
 #include <time.h>
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 
 static bool     s_timeStarted = false;
 static bool     s_flightsDirty = false;   // one-off flights refresh requested
@@ -40,7 +42,8 @@ static void apply_utc_offset(long offsetSec) {
 // ------------------------------------------------------------------ helpers ---
 static bool http_get_json(const String &url, JsonDocument &doc,
                           const JsonDocument *filter = nullptr,
-                          const char *userAgent = nullptr) {
+                          const char *userAgent = nullptr,
+                          String *rawOut = nullptr) {
     WiFiClientSecure client;
     client.setInsecure();               // skip cert validation (keyless public APIs)
     client.setHandshakeTimeout(8);      // cap TLS stalls; the 120s default froze the UI
@@ -59,9 +62,11 @@ static bool http_get_json(const String &url, JsonDocument &doc,
         return false;
     }
 
+    String payload = https.getString();
+    if (rawOut) *rawOut = payload;
     DeserializationError err = filter
-        ? deserializeJson(doc, https.getString(), DeserializationOption::Filter(*filter))
-        : deserializeJson(doc, https.getString());
+        ? deserializeJson(doc, payload, DeserializationOption::Filter(*filter))
+        : deserializeJson(doc, payload);
     https.end();
     if (err) Serial.printf("[data] JSON error: %s  heap=%u\n", err.c_str(), ESP.getFreeHeap());
     return err == DeserializationError::Ok;
@@ -145,7 +150,8 @@ static void poll_weather() {
     // ~6 KB document doesn't crowd the loop task's stack during the TLS handshake.
     static StaticJsonDocument<6144> doc;
     doc.clear();
-    if (!http_get_json(url, doc, &filter)) { ui_weather_error("Weather unavailable"); return; }
+    String raw;
+    if (!http_get_json(url, doc, &filter, nullptr, &raw)) { ui_weather_error("Weather unavailable"); return; }
 
     // Sync the clock to the location's local time (DST-inclusive).
     if (doc.containsKey("utc_offset_seconds"))
@@ -153,9 +159,8 @@ static void poll_weather() {
 
     JsonObject cur = doc["current"];
     if (cur.isNull()) {
-        Serial.print("[weather] parse error — no 'current'. filtered doc=");
-        serializeJson(doc, Serial);
-        Serial.printf("\n          url=%s\n", url);
+        Serial.printf("[weather] no 'current' in response  heap=%u  raw: %.400s\n",
+                      ESP.getFreeHeap(), raw.c_str());
         ui_weather_error("Weather parse error");
         return;
     }
@@ -753,9 +758,15 @@ static void poll_calendar() {
     String summary, dtstart, dtend, duration, location, rrule, uid, recurId, exdate;
 
     String line;
+    uint32_t lineNo = 0;
     while (nextLogical(line)) {
         if (millis() - started > 25000 || totalBytes > 2000000) break;
-        yield();
+        // yield() only runs equal/higher-priority tasks, so it can't service the
+        // lower-priority core-0 IDLE task; a multi-second parse then starves it
+        // and trips the task WDT -> reboot. A periodic 1-tick delay lets IDLE0
+        // run and feed the watchdog.
+        if ((++lineNo & 0x3F) == 0) vTaskDelay(1);
+        else yield();
         if (line.startsWith("BEGIN:VEVENT")) {
             inEvent = true; haveStart = false;
             summary = ""; dtstart = ""; dtend = ""; duration = ""; location = "";
@@ -902,7 +913,7 @@ void data_tick() {
     // Retry on a slow cadence until the offset lands, then never run again.
     static uint32_t s_primeLastMs = 0;
     if (s_utcOffset == 0x7fffffff &&
-        (s_primeLastMs == 0 || millis() - s_primeLastMs >= 15000UL)) {
+        (s_primeLastMs == 0 || millis() - s_primeLastMs >= 5000UL)) {
         s_primeLastMs = millis();
         poll_weather();
         s_poll[PAGE_WEATHER].lastMs = millis();
@@ -943,4 +954,22 @@ void data_tick() {
         pp.lastMs = millis();   // count the cadence from completion, so a slow
                                 // poll can't immediately re-trigger itself
     }
+}
+
+// ---------------------------------------------------------------- net task ---
+// data_tick() blocks on HTTPS fetches (TLS handshake + transfer can take several
+// seconds). Running it on the loop/render task would stall LVGL and freeze the
+// UI, so it lives on its own FreeRTOS task pinned to core 0 (LVGL renders on
+// core 1). All widget writes from here go through the ui_* setters, which lock
+// the LVGL mutex.
+static TaskHandle_t s_netTask = nullptr;
+static void net_task_fn(void *arg) {
+    for (;;) {
+        data_tick();
+        vTaskDelay(pdMS_TO_TICKS(20));
+    }
+}
+void data_task_start() {
+    if (s_netTask) return;
+    xTaskCreatePinnedToCore(net_task_fn, "net", 20 * 1024, nullptr, 1, &s_netTask, 0);
 }
