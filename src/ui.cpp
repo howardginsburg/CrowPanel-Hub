@@ -1008,12 +1008,12 @@ static void build_flights(lv_obj_t *pg) {
 
 // ------------------------------------------------------------ tickers page ---
 static const char *TF_LABELS[5] = {"1D", "5D", "1M", "6M", "1Y"};
-#define SP_W  180
-#define SP_H  60
+#define SP_W  230
+#define SP_H  68
 #define TK_CARD_H 92
-#define BAR_X 512
+#define BAR_X 600
 #define BAR_Y 46
-#define BAR_W 88
+#define BAR_W 140
 
 int ui_ticker_tf_index() { return s_tfIndex; }
 
@@ -1124,6 +1124,7 @@ static void build_tickers(lv_obj_t *pg) {
         lv_obj_set_style_bg_color(c, lv_color_hex(0x141c2e), 0);
         lv_obj_set_style_border_width(c, 0, 0);
         lv_obj_set_style_radius(c, 8, 0);
+        lv_obj_set_style_pad_all(c, 0, 0);   // else default theme padding clips the bottom LIVE/CLOSED row
         lv_obj_clear_flag(c, LV_OBJ_FLAG_SCROLLABLE);
         s_tkCard[i] = c;
 
@@ -1156,7 +1157,7 @@ static void build_tickers(lv_obj_t *pg) {
             SP_W * SP_H * sizeof(lv_color_t), MALLOC_CAP_SPIRAM);
         s_tkSpark[i] = lv_canvas_create(c);
         lv_canvas_set_buffer(s_tkSpark[i], spBuf[i], SP_W, SP_H, LV_IMG_CF_TRUE_COLOR);
-        lv_obj_align(s_tkSpark[i], LV_ALIGN_TOP_LEFT, 322, 14);
+        lv_obj_align(s_tkSpark[i], LV_ALIGN_TOP_LEFT, 340, 12);
         lv_canvas_fill_bg(s_tkSpark[i], lv_color_hex(0x141c2e), LV_OPA_COVER);
 
         s_tkBar[i] = lv_obj_create(c);
@@ -2313,13 +2314,17 @@ static void build_diag(lv_obj_t *pg) {
     const int bw = 16, bgap = 8, baseY = 396;
     for (int i = 0; i < 4; i++) {
         int h = 14 + i * 14;
-        s_diagSigBar[i] = lv_obj_create(pg);
+        // lv_bar (not lv_obj): the theme styles bar parts with a flat fill, unlike
+        // plain objects whose base style has a gradient that mottles the small bars.
+        s_diagSigBar[i] = lv_bar_create(pg);
         lv_obj_set_size(s_diagSigBar[i], bw, h);
         lv_obj_align(s_diagSigBar[i], LV_ALIGN_TOP_LEFT, RX + 64 + i * (bw + bgap), baseY - h);
-        lv_obj_set_style_border_width(s_diagSigBar[i], 0, 0);
-        lv_obj_set_style_radius(s_diagSigBar[i], 3, 0);
-        lv_obj_set_style_bg_opa(s_diagSigBar[i], LV_OPA_COVER, 0);
-        lv_obj_set_style_bg_color(s_diagSigBar[i], lv_color_hex(0x2a3550), 0);
+        lv_bar_set_range(s_diagSigBar[i], 0, 100);
+        lv_bar_set_value(s_diagSigBar[i], 100, LV_ANIM_OFF);   // always full; strength shown by color
+        lv_obj_set_style_border_width(s_diagSigBar[i], 0, LV_PART_MAIN);
+        lv_obj_set_style_radius(s_diagSigBar[i], 3, LV_PART_MAIN);
+        lv_obj_set_style_radius(s_diagSigBar[i], 3, LV_PART_INDICATOR);
+        lv_obj_set_style_bg_color(s_diagSigBar[i], lv_color_hex(0x2a3550), LV_PART_INDICATOR);
     }
     s_diagSigTxt = lv_label_create(pg);
     lv_label_set_text(s_diagSigTxt, "--");
@@ -2564,7 +2569,7 @@ static void update_diag_page() {
         else               { bars = 1; q = "Weak";      sc = 0xff5c5c; }
     }
     for (int i = 0; i < 4; i++)
-        lv_obj_set_style_bg_color(s_diagSigBar[i], lv_color_hex(i < bars ? sc : 0x2a3550), 0);
+        lv_obj_set_style_bg_color(s_diagSigBar[i], lv_color_hex(i < bars ? sc : 0x2a3550), LV_PART_INDICATOR);
     lv_label_set_text(s_diagSigTxt, q);
     lv_obj_set_style_text_color(s_diagSigTxt, lv_color_hex(sc), 0);
 }

@@ -32,6 +32,35 @@ Firmware for the **Elecrow CrowPanel ESP32 HMI 5.0"** (module **DIS07050H**): an
 - Lowering the pixel clock, adding framebuffers, or changing LVGL render mode do NOT fix
   shimmer — only the bounce buffer does. `full_refresh` alone made it worse.
 
+## Threading model (Phase 2 — non-blocking fetches)
+- **Two cores, split by job.** The Arduino `loopTask` (core 1) owns all LVGL rendering
+  (`lv_timer_handler` via `display_tick`). A dedicated **net task pinned to core 0**
+  (`data_task_start()` in [src/data.cpp](../src/data.cpp), 20 KB stack, priority 1) runs
+  `data_tick()` — every blocking HTTPS fetch (weather, flights, tickers, calendar). The
+  Wi-Fi driver also lives on core 0. This keeps the UI fluid while fetches block.
+- **All widget mutation is serialized through a recursive LVGL mutex.** `ui_lock()` /
+  `ui_unlock()` (+ RAII `UiLock`) in [src/ui.cpp](../src/ui.cpp); every public `ui_*`
+  setter takes the lock. `loop()` wraps `ui_tick()`/`display_tick()` in the lock and
+  delays *outside* it. Any code touching LVGL objects from the net task MUST hold it.
+- **`yield()` does NOT feed the task watchdog.** It only switches to equal-or-higher
+  priority tasks, so it never runs the lower-priority core-0 IDLE task the WDT watches. A
+  long CPU-bound loop on the net task (e.g. the ~777 KB / 2000-event calendar ICS parse)
+  must sprinkle a real `vTaskDelay(1)` periodically (e.g. every 64 lines) or it starves
+  IDLE0 and reboots. Arduino's `loopTask` auto-feeds the WDT each `loop()`, so moving
+  long work onto a custom task can reintroduce this.
+
+## LVGL UI conventions (hard-won)
+- **Solid color swatches/bars: use `lv_bar` (value 100%, color via `LV_PART_INDICATOR`),
+  not a plain `lv_obj`.** The default theme's base `lv_obj` style has a subtle
+  gradient/bevel that dithers into mottled two-tone speckle (worst on small
+  high-contrast fills). `bg_opa=COVER`, `radius=0`, and `bg_grad_dir=NONE` do NOT fix
+  it; `lv_bar` parts are styled flat and render clean.
+- **Zero the padding on card-style `lv_obj` containers** (`lv_obj_set_style_pad_all(c, 0,
+  0)`), else the theme's default padding shrinks the content area and clips the
+  bottom-most child.
+- **The bundled Montserrat fonts have no Unicode ellipsis glyph** — use ASCII `...`, not
+  `\u2026`, or it renders as a tofu box.
+
 ## Working conventions
 - **Latest libraries rule:** stay on the latest published libraries unless there's a
   known bug. Do **not** vendor/patch/fork libraries — use published code and write only
@@ -44,8 +73,10 @@ Firmware for the **Elecrow CrowPanel ESP32 HMI 5.0"** (module **DIS07050H**): an
 - **Always set the package proxy for builds:**
   `$proxy="https://packagefeedproxy.microsoft.io/pypi/simple/"; $env:PIP_INDEX_URL=$proxy; $env:UV_INDEX_URL=$proxy; $env:UV_DEFAULT_INDEX=$proxy`
 - **Uploads additionally need UTF-8:** `$env:PYTHONUTF8="1"; $env:PYTHONIOENCODING="utf-8"`.
-- **Kill the serial monitor terminal before uploading** (it holds COM3). Upload takes
-  ~160 s and hard-resets the board via RTS.
+- **Kill the serial monitor terminal before uploading** (it holds the COM port). Upload
+  takes ~80–160 s and hard-resets the board via RTS (so no RST tap needed after upload).
+- **The CH340 COM port re-enumerates** (has been both COM3 and COM4). Don't assume —
+  run `& $pio device list` to find the current port, then pass `--upload-port <COMx>`.
 - Run terminal commands **one at a time** (never parallel).
 
 ## Build / flash / monitor
@@ -56,12 +87,12 @@ $proxy="https://packagefeedproxy.microsoft.io/pypi/simple/"; $env:PIP_INDEX_URL=
 # build
 & $pio run -e crowpanel-50
 
-# upload (kill any monitor first; UTF-8 required)
+# upload (kill any monitor first; UTF-8 required; check the port with `pio device list`)
 $env:PYTHONUTF8="1"; $env:PYTHONIOENCODING="utf-8"
-& $pio run -e crowpanel-50 -t upload
+& $pio run -e crowpanel-50 -t upload --upload-port COM4
 
-# serial monitor @ 115200 on COM3 (user must tap RST to see boot)
-& $pio device monitor -e crowpanel-50 --port COM3
+# serial monitor @ 115200 (user must tap RST to see boot; port may be COM3 or COM4)
+& $pio device monitor -e crowpanel-50 --port COM4
 ```
 
 ## Project layout
