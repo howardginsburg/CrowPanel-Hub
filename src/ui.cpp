@@ -1421,7 +1421,7 @@ static void build_photo(lv_obj_t *pg) {
     lv_obj_align(s_photoCanvas, LV_ALIGN_TOP_LEFT, 0, 0);
 
     s_photoStatus = lv_label_create(pg);
-    lv_label_set_text(s_photoStatus, "Loading nature photo\u2026");
+    lv_label_set_text(s_photoStatus, "Loading nature photo...");
     lv_obj_set_style_text_font(s_photoStatus, &lv_font_montserrat_20, 0);
     lv_obj_set_style_text_color(s_photoStatus, lv_color_hex(0xe6ebf5), 0);
     lv_obj_set_style_bg_color(s_photoStatus, lv_color_hex(0x000000), 0);
@@ -2318,6 +2318,7 @@ static void build_diag(lv_obj_t *pg) {
         lv_obj_align(s_diagSigBar[i], LV_ALIGN_TOP_LEFT, RX + 64 + i * (bw + bgap), baseY - h);
         lv_obj_set_style_border_width(s_diagSigBar[i], 0, 0);
         lv_obj_set_style_radius(s_diagSigBar[i], 3, 0);
+        lv_obj_set_style_bg_opa(s_diagSigBar[i], LV_OPA_COVER, 0);
         lv_obj_set_style_bg_color(s_diagSigBar[i], lv_color_hex(0x2a3550), 0);
     }
     s_diagSigTxt = lv_label_create(pg);

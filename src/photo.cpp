@@ -24,7 +24,7 @@ static const char *PHOTO_DEFAULT_URL = "https://loremflickr.com/800/436/nature";
 
 static uint16_t *s_fb   = nullptr;   // RGB565 framebuffer (PHOTO_W * PHOTO_H)
 static uint8_t  *s_jpg  = nullptr;   // JPEG download scratch
-static char      s_status[48] = "Loading nature photo\u2026";
+static char      s_status[48] = "Loading nature photo...";
 
 static JPEGDEC   s_jpeg;
 static int       s_offX = 0;         // centring offsets applied in the callback
