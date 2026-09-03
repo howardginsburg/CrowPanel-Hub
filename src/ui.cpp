@@ -45,7 +45,9 @@ static String    s_wxSummary;                         // conditions text (for bo
 static int       s_wxHum     = 0;                     // humidity %% (for body recompose)
 static float     s_wxWindMph = 0;                     // wind mph (for body recompose)
 static float     s_wxFeelsF  = -1000;                 // apparent temp F (-1000 = none yet)
+static float     s_wxTempF   = -1000;                 // actual temp F (gates feels-like display)
 static float     s_wxUvIdx   = -1;                    // daily max UV (-1 = none yet)
+static lv_obj_t *s_wxCond;                            // conditions summary line (under location)
 static lv_obj_t *s_fcCard[UI_FORECAST_DAYS];
 static lv_obj_t *s_fcIcon[UI_FORECAST_DAYS];
 static lv_obj_t *s_fcDay[UI_FORECAST_DAYS];
@@ -151,6 +153,7 @@ static lv_obj_t *s_hrCell[UI_HOURLY_N];              // hourly strip cells (Home
 static lv_obj_t *s_hrHour[UI_HOURLY_N];
 static lv_obj_t *s_hrTemp[UI_HOURLY_N];
 static lv_obj_t *s_hrPrecip[UI_HOURLY_N];
+static lv_obj_t *s_hrRain[UI_HOURLY_N];              // precip-probability fill bar
 static lv_obj_t *s_diagLbl;                           // diagnostics multiline body
 static lv_obj_t *s_diagHeapSpark;                     // free-heap trend canvas (Diag)
 static lv_obj_t *s_diagRssiSpark;                     // Wi-Fi RSSI trend canvas (Diag)
@@ -592,19 +595,27 @@ static void build_home(lv_obj_t *pg) {
     lv_obj_set_style_text_align(s_wxLoc, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_align(s_wxLoc, LV_ALIGN_TOP_MID, 303, 74);   // centered under temp + icon cluster
 
-    s_weatherBody = lv_label_create(pg);
-    lv_label_set_text(s_weatherBody, "Loading conditions...");
+    s_wxCond = lv_label_create(pg);                   // summary, centered under location
+    lv_label_set_text(s_wxCond, "Loading conditions...");
+    lv_obj_set_style_text_font(s_wxCond, &lv_font_montserrat_16, 0);
+    lv_obj_set_style_text_color(s_wxCond, lv_color_hex(0xcdd6ea), 0);
+    lv_obj_set_style_text_align(s_wxCond, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_align(s_wxCond, LV_ALIGN_TOP_MID, 303, 94);
+
+    s_weatherBody = lv_label_create(pg);              // grid col A: humidity + wind
+    lv_label_set_text(s_weatherBody, "");
     lv_obj_set_style_text_font(s_weatherBody, &lv_font_montserrat_16, 0);
     lv_obj_set_style_text_color(s_weatherBody, lv_color_hex(0xcdd6ea), 0);
     lv_obj_set_style_text_align(s_weatherBody, LV_TEXT_ALIGN_RIGHT, 0);
-    lv_obj_align(s_weatherBody, LV_ALIGN_TOP_RIGHT, -158, 100);
+    lv_obj_align(s_weatherBody, LV_ALIGN_TOP_RIGHT, -150, 120);
 
-    s_wxDetail = lv_label_create(pg);                 // right column (feels-like + UV)
+    s_wxDetail = lv_label_create(pg);                 // grid col B: feels-like + UV (recolored)
     lv_label_set_text(s_wxDetail, "");
+    lv_label_set_recolor(s_wxDetail, true);
     lv_obj_set_style_text_font(s_wxDetail, &lv_font_montserrat_16, 0);
     lv_obj_set_style_text_color(s_wxDetail, lv_color_hex(0xcdd6ea), 0);
     lv_obj_set_style_text_align(s_wxDetail, LV_TEXT_ALIGN_RIGHT, 0);
-    lv_obj_align(s_wxDetail, LV_ALIGN_TOP_RIGHT, 0, 100);
+    lv_obj_align(s_wxDetail, LV_ALIGN_TOP_RIGHT, 0, 120);
 
     // 5-day forecast strip (bottom): one card per day.
     const int CW    = LV_HOR_RES - SIDEBAR_W - 36;
@@ -673,6 +684,16 @@ static void build_home(lv_obj_t *pg) {
         lv_obj_clear_flag(c, LV_OBJ_FLAG_SCROLLABLE);
         s_hrCell[i] = c;
 
+        s_hrRain[i] = lv_obj_create(c);               // precip fill, rises from bottom (behind labels)
+        lv_obj_set_size(s_hrRain[i], hcW - 4, 0);
+        lv_obj_align(s_hrRain[i], LV_ALIGN_BOTTOM_MID, 0, 0);
+        lv_obj_set_style_bg_color(s_hrRain[i], lv_color_hex(0x2b6cb0), 0);
+        lv_obj_set_style_bg_opa(s_hrRain[i], LV_OPA_40, 0);
+        lv_obj_set_style_border_width(s_hrRain[i], 0, 0);
+        lv_obj_set_style_radius(s_hrRain[i], 5, 0);
+        lv_obj_clear_flag(s_hrRain[i], LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_add_flag(s_hrRain[i], LV_OBJ_FLAG_HIDDEN);
+
         s_hrHour[i] = lv_label_create(c);
         lv_label_set_text(s_hrHour[i], "--");
         lv_obj_set_style_text_font(s_hrHour[i], &lv_font_montserrat_12, 0);
@@ -688,7 +709,7 @@ static void build_home(lv_obj_t *pg) {
         s_hrPrecip[i] = lv_label_create(c);
         lv_label_set_text(s_hrPrecip[i], "");
         lv_obj_set_style_text_font(s_hrPrecip[i], &lv_font_montserrat_12, 0);
-        lv_obj_set_style_text_color(s_hrPrecip[i], lv_color_hex(0x7fd1ff), 0);
+        lv_obj_set_style_text_color(s_hrPrecip[i], lv_color_hex(0xcfe8ff), 0);
         lv_obj_align(s_hrPrecip[i], LV_ALIGN_BOTTOM_MID, 0, -2);
     }
 }
@@ -2571,23 +2592,29 @@ void ui_tick() {
 // ---------------------------------------------------------------------------
 // Data push hooks
 // ---------------------------------------------------------------------------
-// Recompose the two-column conditions block: left column = summary/humidity/wind,
-// right column = feels-like + UV. Same font so the columns read as one block.
+// Recompose the conditions block: a centered summary line plus a 2x2 detail grid
+// (Humidity/Wind on the left, Feels-like/UV on the right). Feels-like is shown
+// only when it differs from the actual temp; UV is per-band recolored.
 static void compose_wx_body() {
+    if (s_wxCond) lv_label_set_text(s_wxCond, s_wxSummary.c_str());
     if (s_weatherBody) {
-        char b[128];
-        snprintf(b, sizeof(b), "%s\nHumidity %d%%\nWind %.0f mph",
-                 s_wxSummary.c_str(), s_wxHum, s_wxWindMph);
+        char b[48];
+        snprintf(b, sizeof(b), "Humidity %d%%\nWind %.0f mph", s_wxHum, s_wxWindMph);
         lv_label_set_text(s_weatherBody, b);
     }
     if (s_wxDetail) {
-        char d[96]; int n = 0;
-        if (s_wxFeelsF > -999.0f)
-            n += snprintf(d + n, sizeof(d) - n, "Feels like %.0fF", s_wxFeelsF);
+        char d[80]; int n = 0;
+        if (s_wxFeelsF > -999.0f && fabsf(s_wxFeelsF - s_wxTempF) >= 1.0f)
+            n += snprintf(d + n, sizeof(d) - n, "Feels %.0fF", s_wxFeelsF);
         if (s_wxUvIdx >= 0) {
-            const char *band = s_wxUvIdx < 3 ? "Low" : s_wxUvIdx < 6 ? "Moderate"
-                             : s_wxUvIdx < 8 ? "High" : s_wxUvIdx < 11 ? "Very High" : "Extreme";
-            snprintf(d + n, sizeof(d) - n, "%sUV %.0f %s", n ? "\n" : "", s_wxUvIdx, band);
+            uint32_t uc; const char *band; float uv = s_wxUvIdx;
+            if (uv < 3)       { uc = 0x54d98a; band = "Low"; }
+            else if (uv < 6)  { uc = 0xe6c34a; band = "Moderate"; }
+            else if (uv < 8)  { uc = 0xef8a3b; band = "High"; }
+            else if (uv < 11) { uc = 0xe6544d; band = "Very High"; }
+            else              { uc = 0xc45cff; band = "Extreme"; }
+            n += snprintf(d + n, sizeof(d) - n, "%s#%06X UV %.0f %s#",
+                          n ? "\n" : "", (unsigned)uc, uv, band);
         }
         lv_label_set_text(s_wxDetail, d);
     }
@@ -2613,6 +2640,7 @@ void ui_weather_set(int code, const String &summary, float tempC, int humidity, 
     s_wxHum     = humidity;
     s_wxWindMph = windKph * 0.621371f;
     s_wxFeelsF  = feelsC * 9.0f / 5.0f + 32.0f;
+    s_wxTempF   = temp;
     compose_wx_body();
     s_wxCode = code;
     s_wxHave = true;                                   // enable offline last-good (#1)
@@ -2623,7 +2651,7 @@ void ui_weather_set(int code, const String &summary, float tempC, int humidity, 
 void ui_weather_error(const String &msg) {
     page_set_loading(PAGE_WEATHER, false);
     if (s_wxHave) return;                               // keep last-good conditions when offline (#1)
-    if (s_weatherBody) lv_label_set_text(s_weatherBody, msg.c_str());
+    if (s_wxCond) lv_label_set_text(s_wxCond, msg.c_str());
 }
 
 void ui_weather_uv_set(float uvIndex) {
@@ -3172,9 +3200,20 @@ void ui_hourly_set(HourCell *cells, int count) {
         char t[8]; snprintf(t, sizeof(t), "%.0f", f);
         lv_label_set_text(s_hrTemp[i], t);
 
+        int pp = cells[i].precipPct;
         char p[8];
-        if (cells[i].precipPct > 0) snprintf(p, sizeof(p), "%d%%", cells[i].precipPct);
+        if (pp > 0) snprintf(p, sizeof(p), "%d%%", pp);
         else p[0] = '\0';
         lv_label_set_text(s_hrPrecip[i], p);
+
+        if (s_hrRain[i]) {                              // precip-probability fill height
+            if (pp > 0) {
+                lv_coord_t maxh = lv_obj_get_height(s_hrCell[i]) - 6;
+                lv_obj_set_height(s_hrRain[i], (lv_coord_t)(maxh * pp / 100));
+                lv_obj_clear_flag(s_hrRain[i], LV_OBJ_FLAG_HIDDEN);
+            } else {
+                lv_obj_add_flag(s_hrRain[i], LV_OBJ_FLAG_HIDDEN);
+            }
+        }
     }
 }
