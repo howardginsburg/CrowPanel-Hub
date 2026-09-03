@@ -16,3 +16,8 @@ void display_set_brightness(uint8_t level);
 // Full frames presented to the panel so far (one per LVGL flush). The Diag page
 // samples this to compute an on-device render FPS.
 uint32_t display_frame_count();
+
+// Pointer to the framebuffer currently scanned out (native RGB565, packed
+// LCD_WIDTH*LCD_HEIGHT). Read it under ui_lock() so LVGL is not mid buffer-swap.
+// nullptr until the first frame has been presented.
+const void *display_front_framebuffer();

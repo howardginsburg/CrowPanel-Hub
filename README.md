@@ -57,6 +57,51 @@ All data APIs are **keyless**. Flight data is credited to **adsb.fi** (non-comme
 
 ---
 
+## The screens
+
+A left-sidebar, multi-page LVGL app. Every shot below is captured straight from the device
+framebuffer through the built-in **`/screenshot.bmp`** endpoint (see
+[Grabbing screenshots](#grabbing-screenshots)) — personal details (Wi-Fi name, location,
+calendar, IP/MAC) are blurred.
+
+<table>
+<tr>
+<td width="50%"><img src="media/home.png" width="400"><br><b>Home</b> — tap-tile launcher with the clock and date across the top; tap a tile to open that tab.</td>
+<td width="50%"><img src="media/weather.png" width="400"><br><b>Weather</b> — current conditions, daylight/sun times, moon phase, an hourly strip and a 5-day outlook.</td>
+</tr>
+<tr>
+<td><img src="media/flights.png" width="400"><br><b>Flights</b> — live ADS-B radar of aircraft overhead; the nearest flight (tail #, type, altitude, speed) is called out on the left. Pinch the range 1–250 NM.</td>
+<td><img src="media/calendar.png" width="400"><br><b>Calendar</b> — upcoming events from your <code>.ics</code> feed, with the next event highlighted and List/Day/Week/Month views.</td>
+</tr>
+<tr>
+<td><img src="media/tickers.png" width="400"><br><b>Tickers</b> — stock/crypto quotes with intraday sparklines and day range; selectable 1D–1Y timeframe.</td>
+<td><img src="media/air.png" width="400"><br><b>Air</b> — US AQI gauge and UV index with a PM2.5 / PM10 / ozone / NO₂ breakdown.</td>
+</tr>
+<tr>
+<td><img src="media/photo.png" width="400"><br><b>Photo</b> — full-bleed nature photo frame that auto-rotates on a configurable interval.</td>
+<td><img src="media/diagnostics.png" width="400"><br><b>Diag</b> — live device stats: uptime, free heap/PSRAM, Wi-Fi RSSI, die temp and render FPS.</td>
+</tr>
+</table>
+
+Configuration happens in the browser — the on-device **Config** tab just points you there:
+
+<table>
+<tr>
+<td width="50%"><img src="media/config.png" width="400"><br><b>Config (on device)</b> — the setup URL plus a scannable QR code to open the web portal.</td>
+<td width="50%"><img src="media/configui.png" width="230"><br><b>Web portal</b> — the full settings page served at <code>http://crowpanel.local</code> from any phone or laptop.</td>
+</tr>
+</table>
+
+### Grabbing screenshots
+
+The firmware serves a pixel-perfect capture of whatever is currently on screen at
+**`http://crowpanel.local/screenshot.bmp`** (or `http://<device-ip>/screenshot.bmp`). Open
+it in a browser — or `curl` it — to save an 800×480 24-bit BMP straight from the
+framebuffer. The **Config** tab shows this URL on the device. If a config PIN is set, it
+gates the screenshot too.
+
+---
+
 ## Configuring it
 
 Everything is set from a **web page** — nothing is typed on the touchscreen. On first

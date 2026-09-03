@@ -2467,7 +2467,9 @@ static void update_config_page() {
         String url = "http://" + net_hostname();
         String d = "Network:  " + net_ssid() + "\nIP:  " + net_ip() +
                    "\n\nEdit any setting from a browser on\nyour network:\n     " + url +
-                   "\n     (or http://" + net_ip() + " )\n\nScan to open:";
+                   "\n     (or http://" + net_ip() + " )\n\n"
+                   "Grab a clean screenshot in a browser:\n     http://" + net_ip() + "/screenshot.bmp" +
+                   "\n\nScan to open:";
         lv_label_set_text(s_cfgDetails, d.c_str());
         render_qr(url);
     } else {

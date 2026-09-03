@@ -4,9 +4,12 @@
 #include "settings.h"
 #include "net_wifi.h"
 #include "display.h"
+#include "board_pins.h"
+#include "ui.h"
 #include <ESPAsyncWebServer.h>
 #include <WiFi.h>
 #include <ArduinoJson.h>
+#include <esp_heap_caps.h>
 
 static AsyncWebServer s_server(80);
 static volatile bool  s_wifiChanged = false;
@@ -86,6 +89,56 @@ public:
     }
 };
 
+// GET /screenshot.bmp -> the live screen as a pixel-perfect 24-bit BMP. Grabs the
+// on-screen framebuffer (under the LVGL lock so it isn't mid buffer-swap) and
+// expands native RGB565 to bottom-up BGR888. Buffer is a one-time PSRAM alloc
+// reused across requests (screenshots are a single-user debug feature).
+static void handle_screenshot(AsyncWebServerRequest *req) {
+    if (!pin_ok(req)) { req->send(401, "application/json", "{\"error\":\"pin\"}"); return; }
+
+    const uint32_t W = LCD_WIDTH, H = LCD_HEIGHT;
+    const uint32_t rowBytes = W * 3;                 // 800*3 = 2400, already 4-byte aligned
+    const uint32_t pixBytes = rowBytes * H;
+    const uint32_t HDR = 54;                          // 14-byte file + 40-byte info header
+    const uint32_t total = HDR + pixBytes;
+
+    static uint8_t *buf = nullptr;
+    if (!buf) buf = (uint8_t *)heap_caps_malloc(total, MALLOC_CAP_SPIRAM);
+    if (!buf) { req->send(503, "text/plain", "no psram for screenshot"); return; }
+
+    memset(buf, 0, HDR);
+    auto put32 = [&](uint32_t o, uint32_t v) { buf[o]=v; buf[o+1]=v>>8; buf[o+2]=v>>16; buf[o+3]=v>>24; };
+    auto put16 = [&](uint32_t o, uint16_t v) { buf[o]=v; buf[o+1]=v>>8; };
+    buf[0] = 'B'; buf[1] = 'M';
+    put32(2, total); put32(10, HDR);
+    put32(14, 40); put32(18, W); put32(22, H); put16(26, 1); put16(28, 24);
+    put32(34, pixBytes); put32(38, 2835); put32(42, 2835);   // 72 DPI
+
+    ui_lock();
+    const uint16_t *fb = (const uint16_t *)display_front_framebuffer();
+    if (fb) {
+        for (uint32_t y = 0; y < H; y++) {
+            const uint16_t *src = fb + (uint32_t)y * W;
+            uint8_t *dst = buf + HDR + (uint32_t)(H - 1 - y) * rowBytes;   // BMP is bottom-up
+            for (uint32_t x = 0; x < W; x++) {
+                uint16_t p = src[x];
+                uint8_t r5 = (p >> 11) & 0x1F, g6 = (p >> 5) & 0x3F, b5 = p & 0x1F;
+                *dst++ = (b5 << 3) | (b5 >> 2);      // B
+                *dst++ = (g6 << 2) | (g6 >> 4);      // G
+                *dst++ = (r5 << 3) | (r5 >> 2);      // R
+            }
+        }
+    }
+    ui_unlock();
+
+    if (!fb) { req->send(503, "text/plain", "no frame yet"); return; }
+
+    AsyncWebServerResponse *res = req->beginResponse_P(200, "image/bmp", buf, total);
+    res->addHeader("Content-Disposition", "inline; filename=\"crowpanel.bmp\"");
+    res->addHeader("Cache-Control", "no-store");
+    req->send(res);
+}
+
 void web_portal_begin() {
     s_server.on("/", HTTP_GET, [](AsyncWebServerRequest *req) {
         req->send_P(200, "text/html", CONFIG_PAGE);
@@ -94,6 +147,7 @@ void web_portal_begin() {
     s_server.on("/api/scan",   HTTP_GET, handle_scan);
     s_server.on("/api/config", HTTP_POST,
         [](AsyncWebServerRequest *req) {}, nullptr, handle_post_config);
+    s_server.on("/screenshot.bmp", HTTP_GET, handle_screenshot);
 
     // Common captive-portal probe URLs -> redirect to the page.
     auto probe = [](AsyncWebServerRequest *req) { req->send_P(200, "text/html", CONFIG_PAGE); };

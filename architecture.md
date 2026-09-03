@@ -2,9 +2,10 @@
 
 A wall/desk information dashboard running on the **Elecrow CrowPanel ESP32 HMI 5.0"**
 (module **DIS07050H**): an 800×480 parallel-RGB touchscreen driven by an ESP32-S3, built
-with **PlatformIO + LVGL 8.3**. It shows seven tabs — Home (clock + weather + sun/moon +
+with **PlatformIO + LVGL 8.3**. It shows eight tabs — Home (clock + weather + sun/moon +
 hourly), Flights (live ADS-B radar), Calendar (iCal), Tickers (stock/crypto sparklines),
-Air (US AQI + UV), Diag (device stats), and Config (Wi-Fi setup QR + web portal).
+Air (US AQI + UV), Photo (auto-rotating nature photo frame), Diag (device stats), and
+Config (Wi-Fi setup QR + web portal).
 
 This document is the complete technical reference — hardware wiring, the display driver,
 module design, data flow, and build details. The [README](README.md) is the high-level
@@ -378,6 +379,9 @@ the LVGL draw buffers, and registers LVGL's display + touch input drivers.
   framebuffers as draw buffers.
 - **`display_tick()`** — pumps `lv_timer_handler()` and performs the flush.
 - **`display_set_brightness(0..255)`** — backlight PWM.
+- **`display_front_framebuffer()`** — returns the last-presented framebuffer so the web
+  portal can serve a screenshot (§7, `/screenshot.bmp`). Stable while `ui_lock()` is held,
+  since the loop task is then blocked and cannot present a new buffer.
 
 > **The bounce buffer and the VSYNC-counter swap are the whole trick — see §5.1 for the
 > full story** (symptom, fix, config cheat-sheet, and porting to the 7.0" board).
@@ -443,10 +447,16 @@ BOOT ~5 s at power-on to wipe creds. Accessors expose `net_state()`, `net_ssid()
 ### `web_portal.cpp` / `web_portal.h` / `web_page.h` — config server
 An `ESPAsyncWebServer` on port 80 serving the config UI ([web_page.h](src/web_page.h),
 embedded HTML/CSS/JS). Endpoints: `GET /` (page), `GET /api/config`, `GET /api/scan`
-(Wi-Fi scan), `POST /api/config` (save). Captive-portal probes (`/generate_204`,
-`/hotspot-detect.html`, `/ncsi.txt`, catch-all `onNotFound`) redirect phones to the form.
-An optional PIN gates config access. On save it raises the flag that
-`web_portal_consume_wifi_changed()` returns to the main loop.
+(Wi-Fi scan), `POST /api/config` (save), and `GET /screenshot.bmp` (framebuffer capture).
+Captive-portal probes (`/generate_204`, `/hotspot-detect.html`, `/ncsi.txt`, catch-all
+`onNotFound`) redirect phones to the form. An optional PIN gates config access (and the
+screenshot). On save it raises the flag that `web_portal_consume_wifi_changed()` returns to
+the main loop.
+
+**`/screenshot.bmp`** captures whatever is currently on screen: it takes `ui_lock()`, reads
+the front framebuffer via `display_front_framebuffer()`, expands each RGB565 pixel to
+BGR888, and streams a 54-byte-header 800×480 24-bit BMP (bottom-up) from a reused PSRAM
+buffer. This is how the screenshots in [README](README.md) and `media/` were captured.
 
 ### `settings.cpp` / `settings.h` — persistent config
 The `Settings` struct (16 fields) is the single source of truth. `settings_load()` /

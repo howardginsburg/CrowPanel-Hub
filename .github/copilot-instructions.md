@@ -100,7 +100,7 @@ $env:PYTHONUTF8="1"; $env:PYTHONIOENCODING="utf-8"
 - [src/display.cpp](../src/display.cpp) — esp_lcd panel + LVGL + tear-free flush
 - [src/touch_gt911.cpp](../src/touch_gt911.cpp) — GT911 reader + PCA9557 reset
 - [src/net_wifi.cpp](../src/net_wifi.cpp) — Wi-Fi lifecycle + 3-layer provisioning
-- [src/web_portal.cpp](../src/web_portal.cpp) / [src/web_page.h](../src/web_page.h) — async config server + captive portal
+- [src/web_portal.cpp](../src/web_portal.cpp) / [src/web_page.h](../src/web_page.h) — async config server + captive portal + `/screenshot.bmp` framebuffer capture
 - [src/settings.cpp](../src/settings.cpp) — NVS-backed settings + JSON import/export
 - [src/ui.cpp](../src/ui.cpp) — sidebar nav + pages + QR rendering
 - [src/data.cpp](../src/data.cpp) — NTP, Open-Meteo weather, adsb.fi flights

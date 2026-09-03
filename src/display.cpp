@@ -19,6 +19,7 @@
 static esp_lcd_panel_handle_t s_panel = nullptr;
 static lv_color_t *s_fb0 = nullptr;
 static lv_color_t *s_fb1 = nullptr;
+static lv_color_t *volatile s_front_fb = nullptr;   // framebuffer last presented (for screenshots)
 static lv_disp_draw_buf_t s_draw_buf;
 
 // VSYNC frame counter, incremented by the panel's VSYNC ISR. flush presents a
@@ -46,6 +47,7 @@ static void flush_cb(lv_disp_drv_t *drv, const lv_area_t *area, lv_color_t *colo
     if (lv_disp_flush_is_last(drv)) {
         uint32_t count = s_vsync_count;
         esp_lcd_panel_draw_bitmap(s_panel, 0, 0, LCD_WIDTH, LCD_HEIGHT, color_p);
+        s_front_fb = color_p;                                    // now the on-screen buffer
         ++s_frame_count;                                         // for Diag render FPS
         int64_t timeout_at = esp_timer_get_time() + 50 * 1000;   // 50 ms guard
         while (s_vsync_count == count) {
@@ -57,6 +59,10 @@ static void flush_cb(lv_disp_drv_t *drv, const lv_area_t *area, lv_color_t *colo
 }
 
 uint32_t display_frame_count() { return s_frame_count; }
+
+// The framebuffer currently on screen (native RGB565, LCD_WIDTH*LCD_HEIGHT). Read
+// under ui_lock() so LVGL isn't mid-swap. Returns nullptr before the first frame.
+const void *display_front_framebuffer() { return (const void *)s_front_fb; }
 
 static void touch_cb(lv_indev_drv_t *drv, lv_indev_data_t *data) {
     TouchPoint p = touch_read();
