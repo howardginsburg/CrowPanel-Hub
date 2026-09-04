@@ -211,10 +211,14 @@ static struct {
 static bool s_wxHave = false, s_flightsHave = false, s_airHave = false;
 static bool s_tickersHave = false, s_calHave = false, s_photoHave = false;
 static lv_obj_t *s_pageSpin[PAGE_COUNT] = { nullptr };   // per-page loading spinners
+#define CFG_TILE_N 13                                 // masked config tiles (Connected view)
 static struct {
-    lv_obj_t *state;    // status headline
-    lv_obj_t *details;  // instructions body
-    lv_obj_t *qr;       // QR canvas
+    lv_obj_t *state;              // status headline
+    lv_obj_t *details;           // portal / connecting instructions body
+    lv_obj_t *grid;              // Connected: 2-column tile grid
+    lv_obj_t *val[CFG_TILE_N];   // per-tile value labels
+    lv_obj_t *qr;                // QR canvas
+    lv_obj_t *qrCap;             // URLs / scan caption under the QR
 } s_cfg;
 
 // Photo frame
@@ -1151,23 +1155,62 @@ static void build_tickers(lv_obj_t *pg) {
 }
 
 // -- Config / Info page: shows WHERE the web config lives (never edits on-device) --
+static const char *CFG_CAPTIONS[CFG_TILE_N] = {
+    "Network", "IP Address", "Location", "Units", "Tickers", "Calendar",
+    "Photo", "Flights Range", "Alerts", "Brightness", "Refresh",
+    "Wi-Fi Password", "Config PIN"
+};
+
 static void build_config(lv_obj_t *pg) {
     s_cfg.state = ui_make_label(pg, "", UI_FONT_LG, UI_COL_ACCENT_CY);
-    lv_obj_align(s_cfg.state, LV_ALIGN_TOP_LEFT, 0, 8);
+    lv_obj_align(s_cfg.state, LV_ALIGN_TOP_LEFT, 0, 0);
 
+    const int QR_COL_W = 224;                                   // reserved right column (QR + URLs)
+    const int GRID_W   = LV_HOR_RES - SIDEBAR_W - 36 - QR_COL_W;
+    const int GRID_Y   = 34;
+
+    // Portal / connecting instructions (left column; hidden when Connected).
     s_cfg.details = ui_make_label(pg, "", UI_FONT_MD, UI_COL_TEXT_SEC);
     lv_label_set_long_mode(s_cfg.details, LV_LABEL_LONG_WRAP);
-    lv_obj_set_width(s_cfg.details, LV_HOR_RES - SIDEBAR_W - 220);
-    lv_obj_align(s_cfg.details, LV_ALIGN_TOP_LEFT, 0, 44);
+    lv_obj_set_width(s_cfg.details, GRID_W);
+    lv_obj_align(s_cfg.details, LV_ALIGN_TOP_LEFT, 0, GRID_Y);
 
-    // QR canvas (right side). Sized for a version-3 code scaled x5 + quiet zone.
+    // Connected: 2-column scrollable grid of masked config tiles.
+    s_cfg.grid = lv_obj_create(pg);
+    lv_obj_set_size(s_cfg.grid, GRID_W, PAGE_H - 36 - GRID_Y);
+    lv_obj_align(s_cfg.grid, LV_ALIGN_TOP_LEFT, 0, GRID_Y);
+    lv_obj_set_style_bg_opa(s_cfg.grid, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(s_cfg.grid, 0, 0);
+    lv_obj_set_style_pad_all(s_cfg.grid, 0, 0);
+    lv_obj_set_style_pad_row(s_cfg.grid, 8, 0);
+    lv_obj_set_style_pad_column(s_cfg.grid, 8, 0);
+    lv_obj_set_flex_flow(s_cfg.grid, LV_FLEX_FLOW_ROW_WRAP);
+    lv_obj_set_scroll_dir(s_cfg.grid, LV_DIR_VER);
+
+    const int TILE_W = (GRID_W - 8) / 2 - 2;
+    for (int i = 0; i < CFG_TILE_N; i++) {
+        lv_obj_t *t = ui_make_card(s_cfg.grid, TILE_W, 56, 8, 8);
+        lv_obj_t *cap = ui_make_label(t, CFG_CAPTIONS[i], UI_FONT_XS, UI_COL_TEXT_MUTE);
+        lv_obj_align(cap, LV_ALIGN_TOP_LEFT, 0, 0);
+        s_cfg.val[i] = ui_make_label(t, "--", UI_FONT_MD, UI_COL_TEXT);
+        lv_label_set_long_mode(s_cfg.val[i], LV_LABEL_LONG_DOT);
+        lv_obj_set_width(s_cfg.val[i], TILE_W - 16);
+        lv_obj_align(s_cfg.val[i], LV_ALIGN_TOP_LEFT, 0, 16);
+    }
+
+    // Right column: QR canvas + URL caption underneath.
     static lv_color_t *qrBuf = nullptr;
     const int QR_PX = 210;
     if (!qrBuf) qrBuf = (lv_color_t *)heap_caps_malloc(
         QR_PX * QR_PX * sizeof(lv_color_t), MALLOC_CAP_SPIRAM);
     s_cfg.qr = lv_canvas_create(pg);
     lv_canvas_set_buffer(s_cfg.qr, qrBuf, QR_PX, QR_PX, LV_IMG_CF_TRUE_COLOR);
-    lv_obj_align(s_cfg.qr, LV_ALIGN_TOP_RIGHT, 0, 8);
+    lv_obj_align(s_cfg.qr, LV_ALIGN_TOP_RIGHT, 0, 0);
+
+    s_cfg.qrCap = ui_make_label(pg, "", UI_FONT_XS, UI_COL_TEXT_MUTE);
+    lv_label_set_long_mode(s_cfg.qrCap, LV_LABEL_LONG_WRAP);
+    lv_obj_set_width(s_cfg.qrCap, QR_PX);
+    lv_obj_align(s_cfg.qrCap, LV_ALIGN_TOP_RIGHT, 0, QR_PX + 6);
 }
 
 // Render a URL into the config-page QR canvas.
@@ -2359,30 +2402,88 @@ static void update_clock() {
     update_sun_labels();
 }
 
+// Mask a secret for on-screen display: fixed dots (never reveals the value/length).
+static String cfg_mask_secret(const String &s) {
+    return s.length() ? String("******") : String("(not set)");
+}
+
+// Show a URL's host only; hide any path/query (which often carries a private token).
+static String cfg_mask_url(const String &url, const char *emptyLabel) {
+    if (url.length() == 0) return String(emptyLabel);
+    int p = url.indexOf("://");
+    String rest = (p >= 0) ? url.substring(p + 3) : url;
+    int slash = rest.indexOf('/');
+    String host = (slash >= 0) ? rest.substring(0, slash) : rest;
+    bool hasPath = (slash >= 0) && (slash < (int)rest.length() - 1);
+    return host + (hasPath ? "/..." : "");
+}
+
+static const char *cfg_severity_name(uint8_t s) {
+    switch (s) { case 1: return "Minor"; case 2: return "Moderate";
+                 case 3: return "Severe"; case 4: return "Extreme"; default: return "?"; }
+}
+
 static void update_config_page() {
     if (s_active != PAGE_CONFIG) return;   // only refresh when visible
 
     NetState st = net_state();
     if (st == NetState::Portal) {
         lv_label_set_text(s_cfg.state, "Setup needed - join the hotspot");
+        lv_obj_add_flag(s_cfg.grid, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_clear_flag(s_cfg.details, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_clear_flag(s_cfg.qr, LV_OBJ_FLAG_HIDDEN);
         String d = "1. On your phone, join Wi-Fi network:\n     \"" + net_ssid() + "\"\n"
                    "2. The setup page opens automatically,\n     or visit http://" + net_ip() +
-                   "\n3. Enter your home Wi-Fi details.\n\nScan the code to open setup:";
+                   "\n3. Enter your home Wi-Fi details.";
         lv_label_set_text(s_cfg.details, d.c_str());
+        lv_label_set_text(s_cfg.qrCap, "Scan the code above\nto open setup.");
         render_qr("http://" + net_ip());
     } else if (st == NetState::Connected) {
         lv_label_set_text(s_cfg.state, "Connected");
+        lv_obj_add_flag(s_cfg.details, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_clear_flag(s_cfg.grid, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_clear_flag(s_cfg.qr, LV_OBJ_FLAG_HIDDEN);
+        const Settings &cfg = settings();
+
+        lv_label_set_text(s_cfg.val[0], net_ssid().c_str());
+        lv_label_set_text(s_cfg.val[1], net_ip().c_str());
+        lv_label_set_text(s_cfg.val[2],
+            (cfg.locationName.length() ? cfg.locationName : String("(not set)")).c_str());
+        lv_label_set_text(s_cfg.val[3],
+            (String(cfg.useMetric ? "Metric" : "Imperial") + ", " +
+             (cfg.use24hClock ? "24h" : "12h")).c_str());
+        lv_label_set_text(s_cfg.val[4],
+            (cfg.tickers.length() ? cfg.tickers : String("(none)")).c_str());
+        lv_label_set_text(s_cfg.val[5], cfg_mask_url(cfg.icsUrl, "(not set)").c_str());
+        lv_label_set_text(s_cfg.val[6],
+            (cfg_mask_url(cfg.photoUrl, "(default)") + "  " + String(cfg.photoSeconds) + "s").c_str());
+        lv_label_set_text(s_cfg.val[7], (String(cfg.radarRangeNm) + " NM").c_str());
+        if (cfg.alertsEnabled)
+            lv_label_set_text(s_cfg.val[8],
+                (String("On - ") + cfg_severity_name(cfg.alertMinSeverity) + "+").c_str());
+        else
+            lv_label_set_text(s_cfg.val[8], "Off");
+        lv_label_set_text(s_cfg.val[9], (String(cfg.brightness) + " / 255").c_str());
+        lv_label_set_text(s_cfg.val[10], (String(cfg.pollSeconds) + " s").c_str());
+        lv_label_set_text(s_cfg.val[11], cfg_mask_secret(cfg.wifiPass).c_str());
+        lv_label_set_text(s_cfg.val[12], cfg_mask_secret(cfg.configPin).c_str());
+
+        // Dim the masked secrets so they read as hidden, not literal values.
+        for (int i : { 11, 12 })
+            lv_obj_set_style_text_color(s_cfg.val[i], lv_color_hex(UI_COL_TEXT_MUTE), 0);
+
         String url = "http://" + net_hostname();
-        String d = "Network:  " + net_ssid() + "\nIP:  " + net_ip() +
-                   "\n\nEdit any setting from a browser on\nyour network:\n     " + url +
-                   "\n     (or http://" + net_ip() + " )\n\n"
-                   "Grab a clean screenshot in a browser:\n     http://" + net_ip() + "/screenshot.bmp" +
-                   "\n\nScan to open:";
-        lv_label_set_text(s_cfg.details, d.c_str());
+        String cap = "Edit from any browser:\n" + url + "\n(or http://" + net_ip() + ")\n"
+                     "Screenshot: /screenshot.bmp\n\nScan the code above.";
+        lv_label_set_text(s_cfg.qrCap, cap.c_str());
         render_qr(url);
     } else {
         lv_label_set_text(s_cfg.state, "Connecting...");
+        lv_obj_add_flag(s_cfg.grid, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_clear_flag(s_cfg.details, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_flag(s_cfg.qr, LV_OBJ_FLAG_HIDDEN);
         lv_label_set_text(s_cfg.details, "Joining your Wi-Fi network...");
+        lv_label_set_text(s_cfg.qrCap, "");
     }
 }
 
