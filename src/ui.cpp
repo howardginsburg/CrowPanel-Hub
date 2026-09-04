@@ -1013,6 +1013,7 @@ static void tf_click_cb(lv_event_t *e) {
     settings_set_ticker_tf((uint8_t)idx);   // remember across reboots
     tf_restyle();
     data_request_tickers();          // refetch this timeframe on the next tick
+    if (net_state() == NetState::Connected) page_set_loading(PAGE_TICKERS, true);
 }
 
 static void draw_sparkline(int i, TickerRow &r) {
@@ -1361,7 +1362,7 @@ static void build_photo(lv_obj_t *pg) {
                          photo_width(), photo_height(), LV_IMG_CF_TRUE_COLOR);
     lv_obj_align(s_photo.canvas, LV_ALIGN_TOP_LEFT, 0, 0);
 
-    s_photo.status = ui_make_label(pg, "Loading nature photo...", UI_FONT_LG, UI_COL_TEXT);
+    s_photo.status = ui_make_label(pg, "Loading photo...", UI_FONT_LG, UI_COL_TEXT);
     lv_obj_set_style_bg_color(s_photo.status, lv_color_hex(0x000000), 0);
     lv_obj_set_style_bg_opa(s_photo.status, LV_OPA_50, 0);
     lv_obj_set_style_pad_all(s_photo.status, 8, 0);
