@@ -113,15 +113,22 @@ static const char CONFIG_PAGE[] PROGMEM = R"HTML(<!DOCTYPE html>
 </main>
 <script>
 const $ = id => document.getElementById(id);
-const fields = ["wifiSsid","locationName","homeLat","homeLon","radarRangeNm","icsUrl",
-  "tickers","pollSeconds","photoUrl","photoSeconds","brightness","configPin",
-  "alertMinSeverity","alertDismissMin"];
-const bools  = ["useMetric","use24hClock","alertsEnabled"];
+// Settings inputs are discovered from the form itself -- every control whose id
+// matches a JSON key round-trips automatically, so there is no hand-kept field
+// list to drift. Non-setting controls (the Wi-Fi scan picker) are skipped.
+const SKIP = new Set(['scanList']);
+const controls = () => [...$('f').elements].filter(el =>
+  el.id && !SKIP.has(el.id) &&
+  (el.tagName === 'SELECT' ||
+   (el.tagName === 'INPUT' && !['button','submit','reset'].includes(el.type))));
 
 async function load() {
-  const r = await fetch('/api/config'); const c = await r.json();
-  fields.forEach(k => { if (c[k] !== undefined && c[k] !== null) $(k).value = c[k]; });
-  bools.forEach(k => { $(k).checked = !!c[k]; });
+  const c = await (await fetch('/api/config')).json();
+  controls().forEach(el => {
+    if (!(el.id in c) || c[el.id] == null) return;
+    if (el.type === 'checkbox') el.checked = !!c[el.id];
+    else el.value = c[el.id];
+  });
 }
 async function scan() {
   $('status').textContent = 'Scanning...';
@@ -172,13 +179,12 @@ async function geocode() {
 $('f').addEventListener('submit', async e => {
   e.preventDefault();
   const body = {};
-  fields.forEach(k => body[k] = $(k).value);
-  bools.forEach(k => body[k] = $(k).checked);
-  ['homeLat','homeLon'].forEach(k => body[k] = parseFloat(body[k]));
-  ['radarRangeNm','pollSeconds','photoSeconds','brightness','alertMinSeverity','alertDismissMin'].forEach(k => body[k] = parseInt(body[k]||0));
-  if (!body.wifiPass) delete body.wifiPass; else {}
-  body.wifiPass = $('wifiPass').value;
-  if (!body.wifiPass) delete body.wifiPass;
+  controls().forEach(el => {
+    if (el.type === 'checkbox') body[el.id] = el.checked;
+    else if (el.type === 'number') body[el.id] = Number(el.value);
+    else body[el.id] = el.value;
+  });
+  if (!body.wifiPass) delete body.wifiPass;   // blank keeps the stored password
   const st = $('status'); st.textContent = 'Saving...'; st.className = '';
   try {
     const r = await fetch('/api/config', { method:'POST',

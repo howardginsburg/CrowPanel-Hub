@@ -31,56 +31,72 @@ static void apply_defaults() {
     s_cfg.configPin    = "";
 }
 
+// --- Field-descriptor table: single source of truth for persistence + JSON. ---
+// Each field lists its NVS key and (optional) JSON key once, so load/save/import/
+// export are table-driven loops instead of 4 hand-synced blocks. Defaults live in
+// apply_defaults(); privacy/derived export values (wifiConfigured, pinSet) and the
+// alertMinSeverity reset are handled explicitly below. ptr points into s_cfg, so
+// the table must follow its definition.
+enum class FType : uint8_t { Str, Bool, U8, U16, F32 };
+struct FieldDesc {
+    FType       type;
+    void       *ptr;         // address of the member in s_cfg
+    const char *nvs;         // NVS key (every field persists)
+    const char *json;        // JSON key, or nullptr for on-device-only fields
+    bool        jsonExport;  // emit in export_json (false = privacy-derived instead)
+    uint16_t    lo, hi;      // clamp bounds applied on import (0 = unbounded)
+};
+
+static const FieldDesc FIELDS[] = {
+    { FType::Str,  &s_cfg.wifiSsid,         "wifiSsid", "wifiSsid",         true,  0, 0 },
+    { FType::Str,  &s_cfg.wifiPass,         "wifiPass", "wifiPass",         false, 0, 0 },  // imported, never exported
+    { FType::Str,  &s_cfg.locationName,     "locName",  "locationName",     true,  0, 0 },
+    { FType::F32,  &s_cfg.homeLat,          "lat",      "homeLat",          true,  0, 0 },
+    { FType::F32,  &s_cfg.homeLon,          "lon",      "homeLon",          true,  0, 0 },
+    { FType::U16,  &s_cfg.radarRangeNm,     "radarNm",  "radarRangeNm",     true,  0, 250 },
+    { FType::Str,  &s_cfg.icsUrl,           "icsUrl",   "icsUrl",           true,  0, 0 },
+    { FType::Str,  &s_cfg.tickers,          "tickers",  "tickers",          true,  0, 0 },
+    { FType::Bool, &s_cfg.useMetric,        "metric",   "useMetric",        true,  0, 0 },
+    { FType::Bool, &s_cfg.use24hClock,      "clk24",    "use24hClock",      true,  0, 0 },
+    { FType::Str,  &s_cfg.photoUrl,         "photoUrl", "photoUrl",         true,  0, 0 },
+    { FType::U16,  &s_cfg.photoSeconds,     "photoSec", "photoSeconds",     true,  10, 0 },
+    { FType::Bool, &s_cfg.alertsEnabled,    "alrtOn",   "alertsEnabled",    true,  0, 0 },
+    { FType::U8,   &s_cfg.alertMinSeverity, "alrtSev",  "alertMinSeverity", true,  0, 0 },  // reset-to-3 handled below
+    { FType::U16,  &s_cfg.alertDismissMin,  "alrtDis",  "alertDismissMin",  true,  0, 1440 },
+    { FType::U8,   &s_cfg.brightness,       "bright",   "brightness",       true,  0, 0 },
+    { FType::U16,  &s_cfg.pollSeconds,      "poll",     "pollSeconds",      true,  20, 0 },
+    { FType::U8,   &s_cfg.tickerTf,         "tickTf",   nullptr,            false, 0, 0 },
+    { FType::U8,   &s_cfg.calView,          "calView",  nullptr,            false, 0, 0 },
+    { FType::U8,   &s_cfg.lastPanel,        "lastPage", nullptr,            false, 0, 0 },
+    { FType::Str,  &s_cfg.configPin,        "pin",      "configPin",        false, 0, 0 },  // imported, exported as pinSet
+};
+
 void settings_load() {
     apply_defaults();
     s_prefs.begin(NS, true);   // read-only
-    s_cfg.wifiSsid     = s_prefs.getString("wifiSsid", s_cfg.wifiSsid);
-    s_cfg.wifiPass     = s_prefs.getString("wifiPass", s_cfg.wifiPass);
-    s_cfg.locationName = s_prefs.getString("locName",  s_cfg.locationName);
-    s_cfg.homeLat      = s_prefs.getFloat ("lat",      s_cfg.homeLat);
-    s_cfg.homeLon      = s_prefs.getFloat ("lon",      s_cfg.homeLon);
-    s_cfg.radarRangeNm = s_prefs.getUShort("radarNm",  s_cfg.radarRangeNm);
-    s_cfg.icsUrl       = s_prefs.getString("icsUrl",   s_cfg.icsUrl);
-    s_cfg.tickers      = s_prefs.getString("tickers",  s_cfg.tickers);
-    s_cfg.useMetric    = s_prefs.getBool  ("metric",   s_cfg.useMetric);
-    s_cfg.use24hClock  = s_prefs.getBool  ("clk24",    s_cfg.use24hClock);
-    s_cfg.photoUrl     = s_prefs.getString("photoUrl", s_cfg.photoUrl);
-    s_cfg.photoSeconds = s_prefs.getUShort("photoSec", s_cfg.photoSeconds);
-    s_cfg.brightness   = s_prefs.getUChar ("bright",   s_cfg.brightness);
-    s_cfg.pollSeconds  = s_prefs.getUShort("poll",     s_cfg.pollSeconds);
-    s_cfg.alertsEnabled    = s_prefs.getBool  ("alrtOn",  s_cfg.alertsEnabled);
-    s_cfg.alertMinSeverity = s_prefs.getUChar ("alrtSev", s_cfg.alertMinSeverity);
-    s_cfg.alertDismissMin  = s_prefs.getUShort("alrtDis", s_cfg.alertDismissMin);
-    s_cfg.tickerTf     = s_prefs.getUChar ("tickTf",   s_cfg.tickerTf);
-    s_cfg.calView      = s_prefs.getUChar ("calView",  s_cfg.calView);
-    s_cfg.lastPanel    = s_prefs.getUChar ("lastPage", s_cfg.lastPanel);
-    s_cfg.configPin    = s_prefs.getString("pin",      s_cfg.configPin);
+    for (const FieldDesc &f : FIELDS) {
+        switch (f.type) {
+            case FType::Str:  *(String *)f.ptr   = s_prefs.getString(f.nvs, *(String *)f.ptr); break;
+            case FType::Bool: *(bool *)f.ptr     = s_prefs.getBool  (f.nvs, *(bool *)f.ptr); break;
+            case FType::U8:   *(uint8_t *)f.ptr  = s_prefs.getUChar (f.nvs, *(uint8_t *)f.ptr); break;
+            case FType::U16:  *(uint16_t *)f.ptr = s_prefs.getUShort(f.nvs, *(uint16_t *)f.ptr); break;
+            case FType::F32:  *(float *)f.ptr    = s_prefs.getFloat (f.nvs, *(float *)f.ptr); break;
+        }
+    }
     s_prefs.end();
 }
 
 void settings_save() {
     s_prefs.begin(NS, false);  // read-write
-    s_prefs.putString("wifiSsid", s_cfg.wifiSsid);
-    s_prefs.putString("wifiPass", s_cfg.wifiPass);
-    s_prefs.putString("locName",  s_cfg.locationName);
-    s_prefs.putFloat ("lat",      s_cfg.homeLat);
-    s_prefs.putFloat ("lon",      s_cfg.homeLon);
-    s_prefs.putUShort("radarNm",  s_cfg.radarRangeNm);
-    s_prefs.putString("icsUrl",   s_cfg.icsUrl);
-    s_prefs.putString("tickers",  s_cfg.tickers);
-    s_prefs.putBool  ("metric",   s_cfg.useMetric);
-    s_prefs.putBool  ("clk24",    s_cfg.use24hClock);
-    s_prefs.putString("photoUrl", s_cfg.photoUrl);
-    s_prefs.putUShort("photoSec", s_cfg.photoSeconds);
-    s_prefs.putUChar ("bright",   s_cfg.brightness);
-    s_prefs.putUShort("poll",     s_cfg.pollSeconds);
-    s_prefs.putBool  ("alrtOn",  s_cfg.alertsEnabled);
-    s_prefs.putUChar ("alrtSev", s_cfg.alertMinSeverity);
-    s_prefs.putUShort("alrtDis", s_cfg.alertDismissMin);
-    s_prefs.putUChar ("tickTf",   s_cfg.tickerTf);
-    s_prefs.putUChar ("calView",  s_cfg.calView);
-    s_prefs.putUChar ("lastPage", s_cfg.lastPanel);
-    s_prefs.putString("pin",      s_cfg.configPin);
+    for (const FieldDesc &f : FIELDS) {
+        switch (f.type) {
+            case FType::Str:  s_prefs.putString(f.nvs, *(String *)f.ptr); break;
+            case FType::Bool: s_prefs.putBool  (f.nvs, *(bool *)f.ptr); break;
+            case FType::U8:   s_prefs.putUChar (f.nvs, *(uint8_t *)f.ptr); break;
+            case FType::U16:  s_prefs.putUShort(f.nvs, *(uint16_t *)f.ptr); break;
+            case FType::F32:  s_prefs.putFloat (f.nvs, *(float *)f.ptr); break;
+        }
+    }
     s_prefs.end();
 }
 
@@ -125,55 +141,44 @@ bool settings_import_json(const String &json) {
     StaticJsonDocument<1536> doc;
     if (deserializeJson(doc, json) != DeserializationError::Ok) return false;
 
-    if (doc.containsKey("wifiSsid"))     s_cfg.wifiSsid     = doc["wifiSsid"].as<String>();
-    if (doc.containsKey("wifiPass"))     s_cfg.wifiPass     = doc["wifiPass"].as<String>();
-    if (doc.containsKey("locationName")) s_cfg.locationName = doc["locationName"].as<String>();
-    if (doc.containsKey("homeLat"))      s_cfg.homeLat      = doc["homeLat"].as<float>();
-    if (doc.containsKey("homeLon"))      s_cfg.homeLon      = doc["homeLon"].as<float>();
-    if (doc.containsKey("radarRangeNm")) s_cfg.radarRangeNm = doc["radarRangeNm"].as<uint16_t>();
-    if (doc.containsKey("icsUrl"))       s_cfg.icsUrl       = doc["icsUrl"].as<String>();
-    if (doc.containsKey("tickers"))      s_cfg.tickers      = doc["tickers"].as<String>();
-    if (doc.containsKey("useMetric"))    s_cfg.useMetric    = doc["useMetric"].as<bool>();
-    if (doc.containsKey("use24hClock"))  s_cfg.use24hClock  = doc["use24hClock"].as<bool>();
-    if (doc.containsKey("photoUrl"))     s_cfg.photoUrl     = doc["photoUrl"].as<String>();
-    if (doc.containsKey("photoSeconds")) s_cfg.photoSeconds = doc["photoSeconds"].as<uint16_t>();
-    if (doc.containsKey("brightness"))   s_cfg.brightness   = doc["brightness"].as<uint8_t>();
-    if (doc.containsKey("pollSeconds"))  s_cfg.pollSeconds  = doc["pollSeconds"].as<uint16_t>();
-    if (doc.containsKey("alertsEnabled"))    s_cfg.alertsEnabled    = doc["alertsEnabled"].as<bool>();
-    if (doc.containsKey("alertMinSeverity")) s_cfg.alertMinSeverity = doc["alertMinSeverity"].as<uint8_t>();
-    if (doc.containsKey("alertDismissMin"))  s_cfg.alertDismissMin  = doc["alertDismissMin"].as<uint16_t>();
-    if (doc.containsKey("configPin"))    s_cfg.configPin    = doc["configPin"].as<String>();
+    for (const FieldDesc &f : FIELDS) {
+        if (!f.json || !doc.containsKey(f.json)) continue;   // on-device fields skip JSON
+        switch (f.type) {
+            case FType::Str:  *(String *)f.ptr   = doc[f.json].as<String>(); break;
+            case FType::Bool: *(bool *)f.ptr     = doc[f.json].as<bool>(); break;
+            case FType::U8:   *(uint8_t *)f.ptr  = doc[f.json].as<uint8_t>(); break;
+            case FType::U16:  *(uint16_t *)f.ptr = doc[f.json].as<uint16_t>(); break;
+            case FType::F32:  *(float *)f.ptr    = doc[f.json].as<float>(); break;
+        }
+    }
 
-    // Clamp to safe ranges.
-    if (s_cfg.radarRangeNm > 250) s_cfg.radarRangeNm = 250;
-    if (s_cfg.pollSeconds  < 20)  s_cfg.pollSeconds  = 20;
-    if (s_cfg.photoSeconds < 10)  s_cfg.photoSeconds = 10;
+    // Clamp numeric fields to their table bounds (0 = unbounded).
+    for (const FieldDesc &f : FIELDS) {
+        if (f.type != FType::U16) continue;
+        uint16_t &v = *(uint16_t *)f.ptr;
+        if (f.lo && v < f.lo) v = f.lo;
+        if (f.hi && v > f.hi) v = f.hi;
+    }
+    // Severity is reset (not clamped) to the default when out of range.
     if (s_cfg.alertMinSeverity < 1 || s_cfg.alertMinSeverity > 4) s_cfg.alertMinSeverity = 3;
-    if (s_cfg.alertDismissMin > 1440) s_cfg.alertDismissMin = 1440;
     return true;
 }
 
 String settings_export_json() {
     StaticJsonDocument<1536> doc;
-    doc["wifiSsid"]      = s_cfg.wifiSsid;
-    // Never expose the stored Wi-Fi password to the client.
-    doc["wifiConfigured"]= settings_has_wifi();
-    doc["locationName"]  = s_cfg.locationName;
-    doc["homeLat"]       = s_cfg.homeLat;
-    doc["homeLon"]       = s_cfg.homeLon;
-    doc["radarRangeNm"]  = s_cfg.radarRangeNm;
-    doc["icsUrl"]        = s_cfg.icsUrl;
-    doc["tickers"]       = s_cfg.tickers;
-    doc["useMetric"]     = s_cfg.useMetric;
-    doc["use24hClock"]   = s_cfg.use24hClock;
-    doc["photoUrl"]      = s_cfg.photoUrl;
-    doc["photoSeconds"]  = s_cfg.photoSeconds;
-    doc["brightness"]    = s_cfg.brightness;
-    doc["pollSeconds"]   = s_cfg.pollSeconds;
-    doc["alertsEnabled"]    = s_cfg.alertsEnabled;
-    doc["alertMinSeverity"] = s_cfg.alertMinSeverity;
-    doc["alertDismissMin"]  = s_cfg.alertDismissMin;
-    doc["pinSet"]        = s_cfg.configPin.length() > 0;
+    for (const FieldDesc &f : FIELDS) {
+        if (!f.json || !f.jsonExport) continue;   // skip on-device + privacy fields
+        switch (f.type) {
+            case FType::Str:  doc[f.json] = *(String *)f.ptr; break;
+            case FType::Bool: doc[f.json] = *(bool *)f.ptr; break;
+            case FType::U8:   doc[f.json] = *(uint8_t *)f.ptr; break;
+            case FType::U16:  doc[f.json] = *(uint16_t *)f.ptr; break;
+            case FType::F32:  doc[f.json] = *(float *)f.ptr; break;
+        }
+    }
+    // Derived fields: expose provisioning state, never the secrets themselves.
+    doc["wifiConfigured"] = settings_has_wifi();
+    doc["pinSet"]         = s_cfg.configPin.length() > 0;
     String out;
     serializeJson(doc, out);
     return out;

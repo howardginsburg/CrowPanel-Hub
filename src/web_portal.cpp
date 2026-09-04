@@ -23,8 +23,25 @@ static bool pin_ok(AsyncWebServerRequest *req) {
     return false;
 }
 
+// Serve the config/captive page (root, captive probes, and unknown-host fallback).
+static void send_config_page(AsyncWebServerRequest *req) {
+    req->send(200, "text/html", CONFIG_PAGE);
+}
+
+// Uniform JSON error body: {"error":"<code>"}.
+static void send_json_error(AsyncWebServerRequest *req, int status, const char *err) {
+    req->send(status, "application/json", String("{\"error\":\"") + err + "\"}");
+}
+
+// Wrap a GET handler with the optional PIN gate.
+static ArRequestHandlerFunction with_pin(ArRequestHandlerFunction fn) {
+    return [fn](AsyncWebServerRequest *req) {
+        if (!pin_ok(req)) { send_json_error(req, 401, "pin"); return; }
+        fn(req);
+    };
+}
+
 static void handle_get_config(AsyncWebServerRequest *req) {
-    if (!pin_ok(req)) { req->send(401, "application/json", "{\"error\":\"pin\"}"); return; }
     req->send(200, "application/json", settings_export_json());
 }
 
@@ -61,12 +78,12 @@ static void handle_post_config(AsyncWebServerRequest *req, uint8_t *data, size_t
     body.concat((const char *)data, len);
     if (index + len != total) return;   // wait for the full body
 
-    if (!pin_ok(req)) { req->send(401, "application/json", "{\"error\":\"pin\"}"); return; }
+    if (!pin_ok(req)) { send_json_error(req, 401, "pin"); return; }
 
     String prevSsid = settings().wifiSsid;
     String prevPass = settings().wifiPass;
     if (!settings_import_json(body)) {
-        req->send(400, "application/json", "{\"error\":\"json\"}");
+        send_json_error(req, 400, "json");
         return;
     }
     settings_save();
@@ -85,7 +102,7 @@ public:
         return net_state() == NetState::Portal;
     }
     void handleRequest(AsyncWebServerRequest *req) override {
-        req->send_P(200, "text/html", CONFIG_PAGE);
+        send_config_page(req);
     }
 };
 
@@ -94,8 +111,6 @@ public:
 // expands native RGB565 to bottom-up BGR888. Buffer is a one-time PSRAM alloc
 // reused across requests (screenshots are a single-user debug feature).
 static void handle_screenshot(AsyncWebServerRequest *req) {
-    if (!pin_ok(req)) { req->send(401, "application/json", "{\"error\":\"pin\"}"); return; }
-
     const uint32_t W = LCD_WIDTH, H = LCD_HEIGHT;
     const uint32_t rowBytes = W * 3;                 // 800*3 = 2400, already 4-byte aligned
     const uint32_t pixBytes = rowBytes * H;
@@ -133,32 +148,26 @@ static void handle_screenshot(AsyncWebServerRequest *req) {
 
     if (!fb) { req->send(503, "text/plain", "no frame yet"); return; }
 
-    AsyncWebServerResponse *res = req->beginResponse_P(200, "image/bmp", buf, total);
+    AsyncWebServerResponse *res = req->beginResponse(200, "image/bmp", buf, total);
     res->addHeader("Content-Disposition", "inline; filename=\"crowpanel.bmp\"");
     res->addHeader("Cache-Control", "no-store");
     req->send(res);
 }
 
 void web_portal_begin() {
-    s_server.on("/", HTTP_GET, [](AsyncWebServerRequest *req) {
-        req->send_P(200, "text/html", CONFIG_PAGE);
-    });
-    s_server.on("/api/config", HTTP_GET, handle_get_config);
+    s_server.on("/", HTTP_GET, send_config_page);
+    s_server.on("/api/config", HTTP_GET, with_pin(handle_get_config));
     s_server.on("/api/scan",   HTTP_GET, handle_scan);
     s_server.on("/api/config", HTTP_POST,
         [](AsyncWebServerRequest *req) {}, nullptr, handle_post_config);
-    s_server.on("/screenshot.bmp", HTTP_GET, handle_screenshot);
+    s_server.on("/screenshot.bmp", HTTP_GET, with_pin(handle_screenshot));
 
-    // Common captive-portal probe URLs -> redirect to the page.
-    auto probe = [](AsyncWebServerRequest *req) { req->send_P(200, "text/html", CONFIG_PAGE); };
-    s_server.on("/generate_204", HTTP_GET, probe);   // Android
-    s_server.on("/hotspot-detect.html", HTTP_GET, probe); // Apple
-    s_server.on("/ncsi.txt", HTTP_GET, probe);       // Windows
+    // Common captive-portal probe URLs (Android/Apple/Windows) -> the config page.
+    const char *probes[] = { "/generate_204", "/hotspot-detect.html", "/ncsi.txt" };
+    for (const char *p : probes) s_server.on(p, HTTP_GET, send_config_page);
 
     s_server.addHandler(new CaptiveHandler());
-    s_server.onNotFound([](AsyncWebServerRequest *req) {
-        req->send_P(200, "text/html", CONFIG_PAGE);
-    });
+    s_server.onNotFound(send_config_page);
 
     s_server.begin();
     Serial.println("[web] config portal listening on :80");

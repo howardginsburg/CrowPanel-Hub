@@ -66,15 +66,10 @@ static int photo_draw_cb(JPEGDRAW *pDraw) {
 // Download the URL into s_jpg. Returns the byte count, or 0 on failure.
 static size_t photo_download(const String &url) {
     WiFiClientSecure client;
-    client.setInsecure();               // public image hosts, no pinning needed
-    client.setHandshakeTimeout(8);
-
     HTTPClient https;
-    https.setConnectTimeout(8000);
-    https.setTimeout(10000);
-    https.setFollowRedirects(HTTPC_FORCE_FOLLOW_REDIRECTS);
-    https.setUserAgent("CrowPanel/1.0");
-    if (!https.begin(client, url)) {
+    HttpOpts opts; opts.readTimeoutMs = 10000; opts.followRedirects = true;
+    opts.userAgent = "CrowPanel/1.0";
+    if (!http_begin(client, https, url, opts)) {
         snprintf(s_status, sizeof(s_status), "Bad URL");
         return 0;
     }

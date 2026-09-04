@@ -3,6 +3,8 @@
 #include "settings.h"
 #include "board_pins.h"
 #include <WiFi.h>
+#include <WiFiClientSecure.h>
+#include <HTTPClient.h>
 #include <DNSServer.h>
 #include <ESPmDNS.h>
 
@@ -16,6 +18,17 @@ static DNSServer s_dns;
 static NetState  s_state = NetState::Booting;
 static uint32_t  s_connectStart = 0;
 static uint32_t  s_lastRetry = 0;
+
+bool http_begin(WiFiClientSecure &client, HTTPClient &https,
+                const String &url, const HttpOpts &opts) {
+    client.setInsecure();               // keyless public APIs, no cert pinning
+    client.setHandshakeTimeout(8);      // cap TLS stalls; the 120s default froze the UI
+    https.setConnectTimeout(8000);      // bound the TCP connect too
+    https.setTimeout(opts.readTimeoutMs);
+    if (opts.userAgent) https.setUserAgent(opts.userAgent);
+    if (opts.followRedirects) https.setFollowRedirects(HTTPC_FORCE_FOLLOW_REDIRECTS);
+    return https.begin(client, url);
+}
 
 void net_check_factory_reset() {
     pinMode(PIN_BOOT_BTN, INPUT_PULLUP);

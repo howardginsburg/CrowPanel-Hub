@@ -1,5 +1,6 @@
 // ui.cpp — sidebar navigation shell + page construction.
 #include "ui.h"
+#include "ui_theme.h"
 #include "settings.h"
 #include "net_wifi.h"
 #include "display.h"
@@ -270,7 +271,7 @@ static lv_obj_t *make_page(lv_obj_t *parent) {
     lv_obj_set_pos(pg, 0, TOPBAR_H);
     lv_obj_set_style_border_width(pg, 0, 0);
     lv_obj_set_style_radius(pg, 0, 0);
-    lv_obj_set_style_bg_color(pg, lv_color_hex(0x0f1420), 0);
+    lv_obj_set_style_bg_color(pg, lv_color_hex(UI_COL_PAGE_BG), 0);
     lv_obj_set_style_pad_all(pg, 18, 0);
     return pg;
 }
@@ -278,11 +279,37 @@ static lv_obj_t *make_page(lv_obj_t *parent) {
 static lv_obj_t *placeholder_body(lv_obj_t *pg, const char *txt) {
     lv_obj_t *l = lv_label_create(pg);
     lv_label_set_text(l, txt);
-    lv_obj_set_style_text_color(l, lv_color_hex(0x8b97b0), 0);
-    lv_obj_set_style_text_font(l, &lv_font_montserrat_16, 0);
+    lv_obj_set_style_text_color(l, lv_color_hex(UI_COL_TEXT_MUTE), 0);
+    lv_obj_set_style_text_font(l, UI_FONT_MD, 0);
     lv_obj_align(l, LV_ALIGN_TOP_LEFT, 0, 8);
     return l;
 }
+
+// Card container: theme card background, no border, given corner radius + inner
+// padding, non-scrollable. Caller sizes/positions and adds children.
+static lv_obj_t *ui_make_card(lv_obj_t *parent, lv_coord_t w, lv_coord_t h,
+                              lv_coord_t radius, lv_coord_t pad) {
+    lv_obj_t *c = lv_obj_create(parent);
+    lv_obj_set_size(c, w, h);
+    lv_obj_set_style_bg_color(c, lv_color_hex(UI_COL_CARD_BG), 0);
+    lv_obj_set_style_border_width(c, 0, 0);
+    lv_obj_set_style_radius(c, radius, 0);
+    lv_obj_set_style_pad_all(c, pad, 0);
+    lv_obj_clear_flag(c, LV_OBJ_FLAG_SCROLLABLE);
+    return c;
+}
+
+// Label with initial text + font + color. Caller aligns and adds any extra
+// styling (text-align, long-mode, width, recolor).
+static lv_obj_t *ui_make_label(lv_obj_t *parent, const char *txt,
+                               const lv_font_t *font, uint32_t color) {
+    lv_obj_t *l = lv_label_create(parent);
+    lv_label_set_text(l, txt);
+    lv_obj_set_style_text_font(l, font, 0);
+    lv_obj_set_style_text_color(l, lv_color_hex(color), 0);
+    return l;
+}
+
 
 // ---------------------------------------------------------------------------
 // Weather icons — simple vector art drawn onto a canvas (no icon font needed).
@@ -569,10 +596,7 @@ static void build_home(lv_obj_t *pg) {
     lv_obj_set_style_clip_corner(s_skyCanvas, true, 0);
     draw_sky(sky_now_min());
 
-    s_sunRiseLbl = lv_label_create(s_skyCanvas);
-    lv_label_set_text(s_sunRiseLbl, "--");
-    lv_obj_set_style_text_font(s_sunRiseLbl, &lv_font_montserrat_12, 0);
-    lv_obj_set_style_text_color(s_sunRiseLbl, lv_color_hex(0xffe0a8), 0);
+    s_sunRiseLbl = ui_make_label(s_skyCanvas, "--", UI_FONT_XS, 0xffe0a8);
     lv_obj_set_style_bg_color(s_sunRiseLbl, lv_color_hex(0x05070e), 0);
     lv_obj_set_style_bg_opa(s_sunRiseLbl, LV_OPA_40, 0);
     lv_obj_set_style_pad_hor(s_sunRiseLbl, 5, 0);
@@ -580,10 +604,7 @@ static void build_home(lv_obj_t *pg) {
     lv_obj_set_style_radius(s_sunRiseLbl, 4, 0);
     lv_obj_align(s_sunRiseLbl, LV_ALIGN_BOTTOM_LEFT, 6, -4);
 
-    s_sunSetLbl = lv_label_create(s_skyCanvas);
-    lv_label_set_text(s_sunSetLbl, "--");
-    lv_obj_set_style_text_font(s_sunSetLbl, &lv_font_montserrat_12, 0);
-    lv_obj_set_style_text_color(s_sunSetLbl, lv_color_hex(0xffc09a), 0);
+    s_sunSetLbl = ui_make_label(s_skyCanvas, "--", UI_FONT_XS, 0xffc09a);
     lv_obj_set_style_bg_color(s_sunSetLbl, lv_color_hex(0x05070e), 0);
     lv_obj_set_style_bg_opa(s_sunSetLbl, LV_OPA_40, 0);
     lv_obj_set_style_pad_hor(s_sunSetLbl, 5, 0);
@@ -601,38 +622,23 @@ static void build_home(lv_obj_t *pg) {
     lv_obj_align(s_wxIcon, LV_ALIGN_TOP_RIGHT, 0, 0);
     lv_canvas_fill_bg(s_wxIcon, lv_color_hex(0x0f1420), LV_OPA_COVER);
 
-    s_wxTemp = lv_label_create(pg);
-    lv_label_set_text(s_wxTemp, "--");
-    lv_obj_set_style_text_font(s_wxTemp, &lv_font_montserrat_48, 0);
-    lv_obj_set_style_text_color(s_wxTemp, lv_color_hex(0xe6ebf5), 0);
+    s_wxTemp = ui_make_label(pg, "--", UI_FONT_XXL, UI_COL_TEXT);
     lv_obj_align(s_wxTemp, LV_ALIGN_TOP_RIGHT, -104, 12);
 
-    s_wxLoc = lv_label_create(pg);
-    lv_label_set_text(s_wxLoc, "");
-    lv_obj_set_style_text_font(s_wxLoc, &lv_font_montserrat_16, 0);
-    lv_obj_set_style_text_color(s_wxLoc, lv_color_hex(0x8b97b0), 0);
+    s_wxLoc = ui_make_label(pg, "", UI_FONT_MD, UI_COL_TEXT_MUTE);
     lv_obj_set_style_text_align(s_wxLoc, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_align(s_wxLoc, LV_ALIGN_TOP_MID, 303, 74);   // centered under temp + icon cluster
 
-    s_wxCond = lv_label_create(pg);                   // summary, centered under location
-    lv_label_set_text(s_wxCond, "Loading conditions...");
-    lv_obj_set_style_text_font(s_wxCond, &lv_font_montserrat_16, 0);
-    lv_obj_set_style_text_color(s_wxCond, lv_color_hex(0xcdd6ea), 0);
+    s_wxCond = ui_make_label(pg, "Loading conditions...", UI_FONT_MD, UI_COL_TEXT_SEC);  // summary, centered under location
     lv_obj_set_style_text_align(s_wxCond, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_align(s_wxCond, LV_ALIGN_TOP_MID, 303, 94);
 
-    s_weatherBody = lv_label_create(pg);              // grid col A: humidity + wind
-    lv_label_set_text(s_weatherBody, "");
-    lv_obj_set_style_text_font(s_weatherBody, &lv_font_montserrat_16, 0);
-    lv_obj_set_style_text_color(s_weatherBody, lv_color_hex(0xcdd6ea), 0);
+    s_weatherBody = ui_make_label(pg, "", UI_FONT_MD, UI_COL_TEXT_SEC);  // grid col A: humidity + wind
     lv_obj_set_style_text_align(s_weatherBody, LV_TEXT_ALIGN_RIGHT, 0);
     lv_obj_align(s_weatherBody, LV_ALIGN_TOP_RIGHT, -150, 120);
 
-    s_wxDetail = lv_label_create(pg);                 // grid col B: feels-like + UV (recolored)
-    lv_label_set_text(s_wxDetail, "");
+    s_wxDetail = ui_make_label(pg, "", UI_FONT_MD, UI_COL_TEXT_SEC);  // grid col B: feels-like + UV (recolored)
     lv_label_set_recolor(s_wxDetail, true);
-    lv_obj_set_style_text_font(s_wxDetail, &lv_font_montserrat_16, 0);
-    lv_obj_set_style_text_color(s_wxDetail, lv_color_hex(0xcdd6ea), 0);
     lv_obj_set_style_text_align(s_wxDetail, LV_TEXT_ALIGN_RIGHT, 0);
     lv_obj_align(s_wxDetail, LV_ALIGN_TOP_RIGHT, 0, 120);
 
@@ -644,20 +650,11 @@ static void build_home(lv_obj_t *pg) {
     const int IC    = 56;
     static lv_color_t *fcBuf[UI_FORECAST_DAYS] = {nullptr};
     for (int i = 0; i < UI_FORECAST_DAYS; i++) {
-        lv_obj_t *card = lv_obj_create(pg);
-        lv_obj_set_size(card, cardW, cardH);
+        lv_obj_t *card = ui_make_card(pg, cardW, cardH, 8, 4);
         lv_obj_align(card, LV_ALIGN_BOTTOM_LEFT, i * (cardW + gap), 0);
-        lv_obj_set_style_bg_color(card, lv_color_hex(0x141c2e), 0);
-        lv_obj_set_style_border_width(card, 0, 0);
-        lv_obj_set_style_radius(card, 8, 0);
-        lv_obj_set_style_pad_all(card, 4, 0);
-        lv_obj_clear_flag(card, LV_OBJ_FLAG_SCROLLABLE);
         s_fcCard[i] = card;
 
-        s_fcDay[i] = lv_label_create(card);
-        lv_label_set_text(s_fcDay[i], "--");
-        lv_obj_set_style_text_font(s_fcDay[i], &lv_font_montserrat_14, 0);
-        lv_obj_set_style_text_color(s_fcDay[i], lv_color_hex(0x9fb0cc), 0);
+        s_fcDay[i] = ui_make_label(card, "--", UI_FONT_SM, UI_COL_TEXT_DIM);
         lv_obj_align(s_fcDay[i], LV_ALIGN_TOP_MID, 0, 2);
 
         if (!fcBuf[i]) fcBuf[i] = (lv_color_t *)heap_caps_malloc(
@@ -667,24 +664,15 @@ static void build_home(lv_obj_t *pg) {
         lv_obj_align(s_fcIcon[i], LV_ALIGN_CENTER, 0, -4);
         lv_canvas_fill_bg(s_fcIcon[i], lv_color_hex(0x141c2e), LV_OPA_COVER);
 
-        s_fcTemp[i] = lv_label_create(card);
-        lv_label_set_text(s_fcTemp[i], "-/-");
-        lv_obj_set_style_text_font(s_fcTemp[i], &lv_font_montserrat_14, 0);
-        lv_obj_set_style_text_color(s_fcTemp[i], lv_color_hex(0xe6ebf5), 0);
+        s_fcTemp[i] = ui_make_label(card, "-/-", UI_FONT_SM, UI_COL_TEXT);
         lv_obj_align(s_fcTemp[i], LV_ALIGN_BOTTOM_MID, 0, 0);
     }
 
     // --- Astro summary (daylight + live countdown, moon phase) + hourly strip ---
-    s_sunLabel = lv_label_create(pg);
-    lv_label_set_text(s_sunLabel, "Daylight --");
-    lv_obj_set_style_text_font(s_sunLabel, &lv_font_montserrat_14, 0);
-    lv_obj_set_style_text_color(s_sunLabel, lv_color_hex(0xcdd6ea), 0);
+    s_sunLabel = ui_make_label(pg, "Daylight --", UI_FONT_SM, UI_COL_TEXT_SEC);
     lv_obj_align(s_sunLabel, LV_ALIGN_TOP_LEFT, 0, 110);
 
-    s_moonLabel = lv_label_create(pg);
-    lv_label_set_text(s_moonLabel, "Moon phase: --");
-    lv_obj_set_style_text_font(s_moonLabel, &lv_font_montserrat_14, 0);
-    lv_obj_set_style_text_color(s_moonLabel, lv_color_hex(0x8b97b0), 0);
+    s_moonLabel = ui_make_label(pg, "Moon phase: --", UI_FONT_SM, UI_COL_TEXT_MUTE);
     lv_obj_align(s_moonLabel, LV_ALIGN_TOP_LEFT, 0, 132);
 
     const int CWh  = LV_HOR_RES - SIDEBAR_W - 36;
@@ -693,14 +681,8 @@ static void build_home(lv_obj_t *pg) {
     const int hcH  = 98;
     const int hcY  = 162;
     for (int i = 0; i < UI_HOURLY_N; i++) {
-        lv_obj_t *c = lv_obj_create(pg);
-        lv_obj_set_size(c, hcW, hcH);
+        lv_obj_t *c = ui_make_card(pg, hcW, hcH, 6, 2);
         lv_obj_align(c, LV_ALIGN_TOP_LEFT, i * (hcW + hgap), hcY);
-        lv_obj_set_style_bg_color(c, lv_color_hex(0x141c2e), 0);
-        lv_obj_set_style_border_width(c, 0, 0);
-        lv_obj_set_style_radius(c, 6, 0);
-        lv_obj_set_style_pad_all(c, 2, 0);
-        lv_obj_clear_flag(c, LV_OBJ_FLAG_SCROLLABLE);
         s_hrCell[i] = c;
 
         s_hrRain[i] = lv_obj_create(c);               // precip fill, rises from bottom (behind labels)
@@ -713,22 +695,13 @@ static void build_home(lv_obj_t *pg) {
         lv_obj_clear_flag(s_hrRain[i], LV_OBJ_FLAG_SCROLLABLE);
         lv_obj_add_flag(s_hrRain[i], LV_OBJ_FLAG_HIDDEN);
 
-        s_hrHour[i] = lv_label_create(c);
-        lv_label_set_text(s_hrHour[i], "--");
-        lv_obj_set_style_text_font(s_hrHour[i], &lv_font_montserrat_12, 0);
-        lv_obj_set_style_text_color(s_hrHour[i], lv_color_hex(0x9fb0cc), 0);
+        s_hrHour[i] = ui_make_label(c, "--", UI_FONT_XS, UI_COL_TEXT_DIM);
         lv_obj_align(s_hrHour[i], LV_ALIGN_TOP_MID, 0, 2);
 
-        s_hrTemp[i] = lv_label_create(c);
-        lv_label_set_text(s_hrTemp[i], "--");
-        lv_obj_set_style_text_font(s_hrTemp[i], &lv_font_montserrat_14, 0);
-        lv_obj_set_style_text_color(s_hrTemp[i], lv_color_hex(0xe6ebf5), 0);
+        s_hrTemp[i] = ui_make_label(c, "--", UI_FONT_SM, UI_COL_TEXT);
         lv_obj_align(s_hrTemp[i], LV_ALIGN_CENTER, 0, 0);
 
-        s_hrPrecip[i] = lv_label_create(c);
-        lv_label_set_text(s_hrPrecip[i], "");
-        lv_obj_set_style_text_font(s_hrPrecip[i], &lv_font_montserrat_12, 0);
-        lv_obj_set_style_text_color(s_hrPrecip[i], lv_color_hex(0xcfe8ff), 0);
+        s_hrPrecip[i] = ui_make_label(c, "", UI_FONT_XS, 0xcfe8ff);
         lv_obj_align(s_hrPrecip[i], LV_ALIGN_BOTTOM_MID, 0, -2);
     }
 }
@@ -869,10 +842,7 @@ static void radar_sweep_timer_cb(lv_timer_t *t) {
 }
 
 static void build_flights(lv_obj_t *pg) {
-    s_flightsStatus = lv_label_create(pg);
-    lv_label_set_text(s_flightsStatus, "Scanning the sky...   data: adsb.fi");
-    lv_obj_set_style_text_color(s_flightsStatus, lv_color_hex(0x8b97b0), 0);
-    lv_obj_set_style_text_font(s_flightsStatus, &lv_font_montserrat_12, 0);
+    s_flightsStatus = ui_make_label(pg, "Scanning the sky...   data: adsb.fi", UI_FONT_XS, UI_COL_TEXT_MUTE);
     lv_obj_align(s_flightsStatus, LV_ALIGN_TOP_LEFT, 0, 8);
 
     // View toggle (top-right): radar map <-> table.
@@ -897,14 +867,14 @@ static void build_flights(lv_obj_t *pg) {
 
     // Zoom controls + current range (right gutter, map view only).
     s_radarRangeLbl = lv_label_create(pg);
-    lv_obj_set_style_text_color(s_radarRangeLbl, lv_color_hex(0x8b97b0), 0);
-    lv_obj_set_style_text_font(s_radarRangeLbl, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_color(s_radarRangeLbl, lv_color_hex(UI_COL_TEXT_MUTE), 0);
+    lv_obj_set_style_text_font(s_radarRangeLbl, UI_FONT_SM, 0);
     lv_obj_align(s_radarRangeLbl, LV_ALIGN_BOTTOM_RIGHT, 0, -96);
 
     s_zoomIn = lv_btn_create(pg);
     lv_obj_set_size(s_zoomIn, 44, 40);
     lv_obj_align(s_zoomIn, LV_ALIGN_BOTTOM_RIGHT, 0, -46);
-    lv_obj_set_style_bg_color(s_zoomIn, lv_color_hex(0x24406a), 0);
+    lv_obj_set_style_bg_color(s_zoomIn, lv_color_hex(UI_COL_BTN_BG), 0);
     lv_obj_add_event_cb(s_zoomIn, zoom_in_cb, LV_EVENT_CLICKED, nullptr);
     lv_obj_t *ziLbl = lv_label_create(s_zoomIn);
     lv_label_set_text(ziLbl, LV_SYMBOL_PLUS);
@@ -913,7 +883,7 @@ static void build_flights(lv_obj_t *pg) {
     s_zoomOut = lv_btn_create(pg);
     lv_obj_set_size(s_zoomOut, 44, 40);
     lv_obj_align(s_zoomOut, LV_ALIGN_BOTTOM_RIGHT, 0, 0);
-    lv_obj_set_style_bg_color(s_zoomOut, lv_color_hex(0x24406a), 0);
+    lv_obj_set_style_bg_color(s_zoomOut, lv_color_hex(UI_COL_BTN_BG), 0);
     lv_obj_add_event_cb(s_zoomOut, zoom_out_cb, LV_EVENT_CLICKED, nullptr);
     lv_obj_t *zoLbl = lv_label_create(s_zoomOut);
     lv_label_set_text(zoLbl, LV_SYMBOL_MINUS);
@@ -923,23 +893,20 @@ static void build_flights(lv_obj_t *pg) {
     s_flightCard = lv_obj_create(pg);
     lv_obj_set_size(s_flightCard, 214, 208);
     lv_obj_align(s_flightCard, LV_ALIGN_CENTER, 0, -6);
-    lv_obj_set_style_bg_color(s_flightCard, lv_color_hex(0x141c2e), 0);
-    lv_obj_set_style_border_color(s_flightCard, lv_color_hex(0x2f7bff), 0);
+    lv_obj_set_style_bg_color(s_flightCard, lv_color_hex(UI_COL_CARD_BG), 0);
+    lv_obj_set_style_border_color(s_flightCard, lv_color_hex(UI_COL_ACCENT2), 0);
     lv_obj_set_style_border_width(s_flightCard, 2, 0);
     lv_obj_set_style_radius(s_flightCard, 8, 0);
     lv_obj_set_style_pad_all(s_flightCard, 10, 0);
     lv_obj_clear_flag(s_flightCard, LV_OBJ_FLAG_SCROLLABLE);
-    s_flightCardLbl = lv_label_create(s_flightCard);
-    lv_label_set_text(s_flightCardLbl, "");
-    lv_obj_set_style_text_color(s_flightCardLbl, lv_color_hex(0xe6ebf5), 0);
-    lv_obj_set_style_text_font(s_flightCardLbl, &lv_font_montserrat_14, 0);
+    s_flightCardLbl = ui_make_label(s_flightCard, "", UI_FONT_SM, UI_COL_TEXT);
     lv_obj_set_width(s_flightCardLbl, 160);
     lv_label_set_long_mode(s_flightCardLbl, LV_LABEL_LONG_WRAP);
     lv_obj_align(s_flightCardLbl, LV_ALIGN_TOP_LEFT, 0, 4);
     lv_obj_t *xBtn = lv_btn_create(s_flightCard);
     lv_obj_set_size(xBtn, 26, 26);
     lv_obj_align(xBtn, LV_ALIGN_TOP_RIGHT, 4, -4);
-    lv_obj_set_style_bg_color(xBtn, lv_color_hex(0x2f7bff), 0);
+    lv_obj_set_style_bg_color(xBtn, lv_color_hex(UI_COL_ACCENT2), 0);
     lv_obj_add_event_cb(xBtn, card_close_cb, LV_EVENT_CLICKED, nullptr);
     lv_obj_t *xLbl = lv_label_create(xBtn);
     lv_label_set_text(xLbl, LV_SYMBOL_CLOSE);
@@ -950,35 +917,23 @@ static void build_flights(lv_obj_t *pg) {
     s_flightHero = lv_obj_create(pg);
     lv_obj_set_size(s_flightHero, 104, 150);
     lv_obj_align(s_flightHero, LV_ALIGN_TOP_LEFT, 0, 44);
-    lv_obj_set_style_bg_color(s_flightHero, lv_color_hex(0x141c2e), 0);
-    lv_obj_set_style_border_color(s_flightHero, lv_color_hex(0x2f7bff), 0);
+    lv_obj_set_style_bg_color(s_flightHero, lv_color_hex(UI_COL_CARD_BG), 0);
+    lv_obj_set_style_border_color(s_flightHero, lv_color_hex(UI_COL_ACCENT2), 0);
     lv_obj_set_style_border_width(s_flightHero, 1, 0);
     lv_obj_set_style_radius(s_flightHero, 8, 0);
     lv_obj_set_style_pad_all(s_flightHero, 8, 0);
     lv_obj_clear_flag(s_flightHero, LV_OBJ_FLAG_SCROLLABLE);
 
-    lv_obj_t *htag = lv_label_create(s_flightHero);
-    lv_label_set_text(htag, "NEAREST");
-    lv_obj_set_style_text_font(htag, &lv_font_montserrat_12, 0);
-    lv_obj_set_style_text_color(htag, lv_color_hex(0x7fd1ff), 0);
+    lv_obj_t *htag = ui_make_label(s_flightHero, "NEAREST", UI_FONT_XS, UI_COL_ACCENT_CY);
     lv_obj_align(htag, LV_ALIGN_TOP_LEFT, 0, 0);
 
-    s_heroCallsign = lv_label_create(s_flightHero);
-    lv_label_set_text(s_heroCallsign, "--");
-    lv_obj_set_style_text_font(s_heroCallsign, &lv_font_montserrat_16, 0);
-    lv_obj_set_style_text_color(s_heroCallsign, lv_color_hex(0xe6ebf5), 0);
+    s_heroCallsign = ui_make_label(s_flightHero, "--", UI_FONT_MD, UI_COL_TEXT);
     lv_obj_align(s_heroCallsign, LV_ALIGN_TOP_LEFT, 0, 18);
 
-    s_heroDist = lv_label_create(s_flightHero);
-    lv_label_set_text(s_heroDist, "--");
-    lv_obj_set_style_text_font(s_heroDist, &lv_font_montserrat_16, 0);
-    lv_obj_set_style_text_color(s_heroDist, lv_color_hex(0x39d98a), 0);
+    s_heroDist = ui_make_label(s_flightHero, "--", UI_FONT_MD, UI_COL_GOOD);
     lv_obj_align(s_heroDist, LV_ALIGN_TOP_LEFT, 0, 42);
 
-    s_heroBody = lv_label_create(s_flightHero);
-    lv_label_set_text(s_heroBody, "");
-    lv_obj_set_style_text_font(s_heroBody, &lv_font_montserrat_12, 0);
-    lv_obj_set_style_text_color(s_heroBody, lv_color_hex(0xcdd6ea), 0);
+    s_heroBody = ui_make_label(s_flightHero, "", UI_FONT_XS, UI_COL_TEXT_SEC);
     lv_obj_set_style_text_line_space(s_heroBody, 4, 0);
     lv_obj_set_width(s_heroBody, 88);
     lv_label_set_long_mode(s_heroBody, LV_LABEL_LONG_WRAP);
@@ -1084,10 +1039,7 @@ static void draw_sparkline(int i, TickerRow &r) {
 static void build_tickers(lv_obj_t *pg) {
     const int CW = LV_HOR_RES - SIDEBAR_W - 36;
 
-    s_tickersStatus = lv_label_create(pg);
-    lv_label_set_text(s_tickersStatus, "Loading quotes...");
-    lv_obj_set_style_text_color(s_tickersStatus, lv_color_hex(0x8b97b0), 0);
-    lv_obj_set_style_text_font(s_tickersStatus, &lv_font_montserrat_12, 0);
+    s_tickersStatus = ui_make_label(pg, "Loading quotes...", UI_FONT_XS, UI_COL_TEXT_MUTE);
     lv_obj_align(s_tickersStatus, LV_ALIGN_TOP_LEFT, 0, 6);
 
     // Timeframe selector row (top-right).
@@ -1101,10 +1053,7 @@ static void build_tickers(lv_obj_t *pg) {
         lv_obj_clear_flag(b, LV_OBJ_FLAG_SCROLLABLE);
         lv_obj_add_flag(b, LV_OBJ_FLAG_CLICKABLE);
         lv_obj_add_event_cb(b, tf_click_cb, LV_EVENT_CLICKED, (void *)(intptr_t)i);
-        lv_obj_t *l = lv_label_create(b);
-        lv_label_set_text(l, TF_LABELS[i]);
-        lv_obj_set_style_text_font(l, &lv_font_montserrat_14, 0);
-        lv_obj_set_style_text_color(l, lv_color_hex(0xe6ebf5), 0);
+        lv_obj_t *l = ui_make_label(b, TF_LABELS[i], UI_FONT_SM, UI_COL_TEXT);
         lv_obj_center(l);
         s_tfBtn[i] = b;
     }
@@ -1124,24 +1073,14 @@ static void build_tickers(lv_obj_t *pg) {
     static lv_color_t *spBuf[8] = {nullptr};
     const int cardW = CW - 12;       // leave room for the scrollbar
     for (int i = 0; i < 8; i++) {
-        lv_obj_t *c = lv_obj_create(s_tkList);
-        lv_obj_set_size(c, cardW, TK_CARD_H);
+        lv_obj_t *c = ui_make_card(s_tkList, cardW, TK_CARD_H, 8, 0);   // pad 0 else theme padding clips the bottom LIVE/CLOSED row
         lv_obj_set_pos(c, 0, i * (TK_CARD_H + 8));
-        lv_obj_set_style_bg_color(c, lv_color_hex(0x141c2e), 0);
-        lv_obj_set_style_border_width(c, 0, 0);
-        lv_obj_set_style_radius(c, 8, 0);
-        lv_obj_set_style_pad_all(c, 0, 0);   // else default theme padding clips the bottom LIVE/CLOSED row
-        lv_obj_clear_flag(c, LV_OBJ_FLAG_SCROLLABLE);
         s_tkCard[i] = c;
 
-        s_tkSym[i] = lv_label_create(c);
-        lv_obj_set_style_text_font(s_tkSym[i], &lv_font_montserrat_28, 0);
-        lv_obj_set_style_text_color(s_tkSym[i], lv_color_hex(0xffffff), 0);
+        s_tkSym[i] = ui_make_label(c, "", UI_FONT_XL, UI_COL_WHITE);
         lv_obj_align(s_tkSym[i], LV_ALIGN_TOP_LEFT, 6, 4);
 
-        s_tkName[i] = lv_label_create(c);
-        lv_obj_set_style_text_font(s_tkName[i], &lv_font_montserrat_12, 0);
-        lv_obj_set_style_text_color(s_tkName[i], lv_color_hex(0x8b97b0), 0);
+        s_tkName[i] = ui_make_label(c, "", UI_FONT_XS, UI_COL_TEXT_MUTE);
         lv_label_set_long_mode(s_tkName[i], LV_LABEL_LONG_DOT);
         lv_obj_set_width(s_tkName[i], 150);
         lv_obj_align(s_tkName[i], LV_ALIGN_TOP_LEFT, 6, 42);
@@ -1150,9 +1089,7 @@ static void build_tickers(lv_obj_t *pg) {
         lv_obj_set_style_text_font(s_tkState[i], &lv_font_montserrat_12, 0);
         lv_obj_align(s_tkState[i], LV_ALIGN_TOP_LEFT, 6, 64);
 
-        s_tkPrice[i] = lv_label_create(c);
-        lv_obj_set_style_text_font(s_tkPrice[i], &lv_font_montserrat_28, 0);
-        lv_obj_set_style_text_color(s_tkPrice[i], lv_color_hex(0xe6ebf5), 0);
+        s_tkPrice[i] = ui_make_label(c, "", UI_FONT_XL, UI_COL_TEXT);
         lv_obj_align(s_tkPrice[i], LV_ALIGN_TOP_LEFT, 172, 8);
 
         s_tkChange[i] = lv_label_create(c);
@@ -1182,14 +1119,10 @@ static void build_tickers(lv_obj_t *pg) {
         lv_obj_clear_flag(s_tkBarDot[i], LV_OBJ_FLAG_SCROLLABLE);
         lv_obj_align(s_tkBarDot[i], LV_ALIGN_TOP_LEFT, BAR_X, BAR_Y - 2);
 
-        s_tkLo[i] = lv_label_create(c);
-        lv_obj_set_style_text_font(s_tkLo[i], &lv_font_montserrat_12, 0);
-        lv_obj_set_style_text_color(s_tkLo[i], lv_color_hex(0x8b97b0), 0);
+        s_tkLo[i] = ui_make_label(c, "", UI_FONT_XS, UI_COL_TEXT_MUTE);
         lv_obj_align(s_tkLo[i], LV_ALIGN_TOP_LEFT, BAR_X, BAR_Y + 12);
 
-        s_tkHi[i] = lv_label_create(c);
-        lv_obj_set_style_text_font(s_tkHi[i], &lv_font_montserrat_12, 0);
-        lv_obj_set_style_text_color(s_tkHi[i], lv_color_hex(0x8b97b0), 0);
+        s_tkHi[i] = ui_make_label(c, "", UI_FONT_XS, UI_COL_TEXT_MUTE);
         lv_obj_align(s_tkHi[i], LV_ALIGN_TOP_LEFT, BAR_X, BAR_Y + 26);
 
         lv_obj_add_flag(c, LV_OBJ_FLAG_HIDDEN);
@@ -1198,16 +1131,12 @@ static void build_tickers(lv_obj_t *pg) {
 
 // -- Config / Info page: shows WHERE the web config lives (never edits on-device) --
 static void build_config(lv_obj_t *pg) {
-    s_cfgState = lv_label_create(pg);
-    lv_obj_set_style_text_font(s_cfgState, &lv_font_montserrat_20, 0);
-    lv_obj_set_style_text_color(s_cfgState, lv_color_hex(0x7fd1ff), 0);
+    s_cfgState = ui_make_label(pg, "", UI_FONT_LG, UI_COL_ACCENT_CY);
     lv_obj_align(s_cfgState, LV_ALIGN_TOP_LEFT, 0, 8);
 
-    s_cfgDetails = lv_label_create(pg);
+    s_cfgDetails = ui_make_label(pg, "", UI_FONT_MD, UI_COL_TEXT_SEC);
     lv_label_set_long_mode(s_cfgDetails, LV_LABEL_LONG_WRAP);
     lv_obj_set_width(s_cfgDetails, LV_HOR_RES - SIDEBAR_W - 220);
-    lv_obj_set_style_text_color(s_cfgDetails, lv_color_hex(0xcdd6ea), 0);
-    lv_obj_set_style_text_font(s_cfgDetails, &lv_font_montserrat_16, 0);
     lv_obj_align(s_cfgDetails, LV_ALIGN_TOP_LEFT, 0, 44);
 
     // QR canvas (right side). Sized for a version-3 code scaled x5 + quiet zone.
@@ -1285,7 +1214,7 @@ static void build_topbar(lv_obj_t *scr) {
     s_topbar = lv_obj_create(scr);
     lv_obj_set_size(s_topbar, LV_HOR_RES, TOPBAR_H);
     lv_obj_set_pos(s_topbar, 0, 0);
-    lv_obj_set_style_bg_color(s_topbar, lv_color_hex(0x161d2e), 0);
+    lv_obj_set_style_bg_color(s_topbar, lv_color_hex(UI_COL_SURFACE), 0);
     lv_obj_set_style_border_width(s_topbar, 0, 0);
     lv_obj_set_style_radius(s_topbar, 0, 0);
     lv_obj_set_style_pad_all(s_topbar, 0, 0);
@@ -1294,17 +1223,14 @@ static void build_topbar(lv_obj_t *scr) {
     s_topbarBack = lv_btn_create(s_topbar);
     lv_obj_set_size(s_topbarBack, 58, TOPBAR_H - 10);
     lv_obj_align(s_topbarBack, LV_ALIGN_LEFT_MID, 6, 0);
-    lv_obj_set_style_bg_color(s_topbarBack, lv_color_hex(0x24406a), 0);
+    lv_obj_set_style_bg_color(s_topbarBack, lv_color_hex(UI_COL_BTN_BG), 0);
     lv_obj_set_style_radius(s_topbarBack, 8, 0);
     lv_obj_add_event_cb(s_topbarBack, topbar_back_cb, LV_EVENT_CLICKED, nullptr);
     lv_obj_t *bl = lv_label_create(s_topbarBack);
     lv_label_set_text(bl, LV_SYMBOL_HOME);
     lv_obj_center(bl);
 
-    s_topbarTitle = lv_label_create(s_topbar);
-    lv_label_set_text(s_topbarTitle, PAGE_TITLES[PAGE_LAUNCHER]);
-    lv_obj_set_style_text_font(s_topbarTitle, &lv_font_montserrat_20, 0);
-    lv_obj_set_style_text_color(s_topbarTitle, lv_color_hex(0xe6ebf5), 0);
+    s_topbarTitle = ui_make_label(s_topbar, PAGE_TITLES[PAGE_LAUNCHER], UI_FONT_LG, UI_COL_TEXT);
     lv_obj_align(s_topbarTitle, LV_ALIGN_LEFT_MID, 76, 0);
 
     // Wi-Fi signal bars, pinned to the far right.
@@ -1321,21 +1247,15 @@ static void build_topbar(lv_obj_t *scr) {
         lv_obj_align(s_topWifiBar[i], LV_ALIGN_BOTTOM_LEFT, i * (bw + bgap), 0);
         lv_obj_set_style_border_width(s_topWifiBar[i], 0, 0);
         lv_obj_set_style_radius(s_topWifiBar[i], 1, 0);
-        lv_obj_set_style_bg_color(s_topWifiBar[i], lv_color_hex(0x2a3550), 0);
+        lv_obj_set_style_bg_color(s_topWifiBar[i], lv_color_hex(UI_COL_TRACK_BG), 0);
         lv_obj_clear_flag(s_topWifiBar[i], LV_OBJ_FLAG_SCROLLABLE);
     }
 
     // Global clock (right): muted date + bold time, same font so it reads cleanly.
     // Positioned in topbar_relayout() right-to-left so the date never clips.
-    s_clockDate = lv_label_create(s_topbar);
-    lv_label_set_text(s_clockDate, "");
-    lv_obj_set_style_text_font(s_clockDate, &lv_font_montserrat_20, 0);
-    lv_obj_set_style_text_color(s_clockDate, lv_color_hex(0x8b97b0), 0);
+    s_clockDate = ui_make_label(s_topbar, "", UI_FONT_LG, UI_COL_TEXT_MUTE);
 
-    s_clockTime = lv_label_create(s_topbar);
-    lv_label_set_text(s_clockTime, "--:--");
-    lv_obj_set_style_text_font(s_clockTime, &lv_font_montserrat_20, 0);
-    lv_obj_set_style_text_color(s_clockTime, lv_color_hex(0xffffff), 0);
+    s_clockTime = ui_make_label(s_topbar, "--:--", UI_FONT_LG, UI_COL_WHITE);
 
     topbar_relayout();
     update_topbar_wifi();
@@ -1372,14 +1292,14 @@ static void build_launcher(lv_obj_t *pg) {
         lv_style_transition_dsc_init(&s_tileTrIn,  props, lv_anim_path_ease_out,  80, 0, NULL);
         lv_style_transition_dsc_init(&s_tileTrOut, props, lv_anim_path_ease_out, 320, 0, NULL);
         lv_style_init(&s_tileDef);
-        lv_style_set_bg_color(&s_tileDef, lv_color_hex(0x161d2e));
-        lv_style_set_outline_color(&s_tileDef, lv_color_hex(0x7fb0ff));
+        lv_style_set_bg_color(&s_tileDef, lv_color_hex(UI_COL_SURFACE));
+        lv_style_set_outline_color(&s_tileDef, lv_color_hex(UI_COL_ACCENT_LT));
         lv_style_set_outline_width(&s_tileDef, 0);
         lv_style_set_outline_opa(&s_tileDef, LV_OPA_TRANSP);
         lv_style_set_outline_pad(&s_tileDef, 0);
         lv_style_set_transition(&s_tileDef, &s_tileTrOut);   // fade-out on release
         lv_style_init(&s_tilePr);
-        lv_style_set_bg_color(&s_tilePr, lv_color_hex(0x24406a));
+        lv_style_set_bg_color(&s_tilePr, lv_color_hex(UI_COL_BTN_BG));
         lv_style_set_outline_width(&s_tilePr, 3);
         lv_style_set_outline_opa(&s_tilePr, LV_OPA_COVER);
         lv_style_set_transition(&s_tilePr, &s_tileTrIn);     // quick light-up on press
@@ -1397,16 +1317,10 @@ static void build_launcher(lv_obj_t *pg) {
         lv_obj_add_flag(tile, LV_OBJ_FLAG_CLICKABLE);
         lv_obj_add_event_cb(tile, launcher_tile_cb, LV_EVENT_CLICKED, (void *)(intptr_t)p);
 
-        lv_obj_t *ic = lv_label_create(tile);
-        lv_label_set_text(ic, PAGE_ICONS[p]);
-        lv_obj_set_style_text_font(ic, &lv_font_montserrat_28, 0);
-        lv_obj_set_style_text_color(ic, lv_color_hex(0x7fb0ff), 0);
+        lv_obj_t *ic = ui_make_label(tile, PAGE_ICONS[p], UI_FONT_XL, UI_COL_ACCENT_LT);
         lv_obj_align(ic, LV_ALIGN_CENTER, 0, -18);
 
-        lv_obj_t *lb = lv_label_create(tile);
-        lv_label_set_text(lb, PAGE_TITLES[p]);
-        lv_obj_set_style_text_font(lb, &lv_font_montserrat_16, 0);
-        lv_obj_set_style_text_color(lb, lv_color_hex(0xe6ebf5), 0);
+        lv_obj_t *lb = ui_make_label(tile, PAGE_TITLES[p], UI_FONT_MD, UI_COL_TEXT);
         lv_obj_align(lb, LV_ALIGN_CENTER, 0, 24);
     }
 }
@@ -1427,10 +1341,7 @@ static void build_photo(lv_obj_t *pg) {
                          photo_width(), photo_height(), LV_IMG_CF_TRUE_COLOR);
     lv_obj_align(s_photoCanvas, LV_ALIGN_TOP_LEFT, 0, 0);
 
-    s_photoStatus = lv_label_create(pg);
-    lv_label_set_text(s_photoStatus, "Loading nature photo...");
-    lv_obj_set_style_text_font(s_photoStatus, &lv_font_montserrat_20, 0);
-    lv_obj_set_style_text_color(s_photoStatus, lv_color_hex(0xe6ebf5), 0);
+    s_photoStatus = ui_make_label(pg, "Loading nature photo...", UI_FONT_LG, UI_COL_TEXT);
     lv_obj_set_style_bg_color(s_photoStatus, lv_color_hex(0x000000), 0);
     lv_obj_set_style_bg_opa(s_photoStatus, LV_OPA_50, 0);
     lv_obj_set_style_pad_all(s_photoStatus, 8, 0);
@@ -1747,10 +1658,7 @@ static void build_calendar(lv_obj_t *pg) {
     s_calView = settings().calView;                 // restore saved view
     if (s_calView < CAL_LIST || s_calView > CAL_MONTH) s_calView = CAL_LIST;
 
-    s_calStatus = lv_label_create(pg);
-    lv_label_set_text(s_calStatus, "Loading calendar...");
-    lv_obj_set_style_text_color(s_calStatus, lv_color_hex(0x8b97b0), 0);
-    lv_obj_set_style_text_font(s_calStatus, &lv_font_montserrat_12, 0);
+    s_calStatus = ui_make_label(pg, "Loading calendar...", UI_FONT_XS, UI_COL_TEXT_MUTE);
     lv_obj_align(s_calStatus, LV_ALIGN_TOP_LEFT, 0, 6);
 
     // View selector (List / Day / Week / Month), top-right, like the ticker timeframe.
@@ -1765,10 +1673,7 @@ static void build_calendar(lv_obj_t *pg) {
             lv_obj_clear_flag(b, LV_OBJ_FLAG_SCROLLABLE);
             lv_obj_add_flag(b, LV_OBJ_FLAG_CLICKABLE);
             lv_obj_add_event_cb(b, cal_view_click_cb, LV_EVENT_CLICKED, (void *)(intptr_t)i);
-            lv_obj_t *l = lv_label_create(b);
-            lv_label_set_text(l, CAL_VIEW_LABELS[i]);
-            lv_obj_set_style_text_font(l, &lv_font_montserrat_14, 0);
-            lv_obj_set_style_text_color(l, lv_color_hex(0xe6ebf5), 0);
+            lv_obj_t *l = ui_make_label(b, CAL_VIEW_LABELS[i], UI_FONT_SM, UI_COL_TEXT);
             lv_obj_center(l);
             s_calViewBtn[i] = b;
         }
@@ -1790,10 +1695,7 @@ static void build_calendar(lv_obj_t *pg) {
         lv_obj_add_event_cb(pv, cal_nav_cb, LV_EVENT_CLICKED, (void *)(intptr_t)(-1));
         lv_obj_t *pl = lv_label_create(pv); lv_label_set_text(pl, LV_SYMBOL_LEFT); lv_obj_center(pl);
 
-        s_calPeriodLbl = lv_label_create(s_calNav);
-        lv_label_set_text(s_calPeriodLbl, "");
-        lv_obj_set_style_text_font(s_calPeriodLbl, &lv_font_montserrat_16, 0);
-        lv_obj_set_style_text_color(s_calPeriodLbl, lv_color_hex(0xe6ebf5), 0);
+        s_calPeriodLbl = ui_make_label(s_calNav, "", UI_FONT_MD, UI_COL_TEXT);
         lv_obj_align(s_calPeriodLbl, LV_ALIGN_LEFT_MID, 42, 0);
 
         lv_obj_t *nx = lv_btn_create(s_calNav);
@@ -1823,34 +1725,25 @@ static void build_calendar(lv_obj_t *pg) {
     lv_obj_set_style_bg_color(s_calHero, lv_color_hex(0x18294a), 0);
     lv_obj_set_style_border_width(s_calHero, 4, 0);
     lv_obj_set_style_border_side(s_calHero, LV_BORDER_SIDE_LEFT, 0);
-    lv_obj_set_style_border_color(s_calHero, lv_color_hex(0x2f80ed), 0);
+    lv_obj_set_style_border_color(s_calHero, lv_color_hex(UI_COL_ACCENT), 0);
     lv_obj_set_style_radius(s_calHero, 10, 0);
     lv_obj_set_style_pad_all(s_calHero, 0, 0);
     lv_obj_clear_flag(s_calHero, LV_OBJ_FLAG_SCROLLABLE);
 
-    s_calHeroTag = lv_label_create(s_calHero);
-    lv_label_set_text(s_calHeroTag, "UP NEXT");
-    lv_obj_set_style_text_font(s_calHeroTag, &lv_font_montserrat_12, 0);
-    lv_obj_set_style_text_color(s_calHeroTag, lv_color_hex(0xffffff), 0);
-    lv_obj_set_style_bg_color(s_calHeroTag, lv_color_hex(0x2f80ed), 0);
+    s_calHeroTag = ui_make_label(s_calHero, "UP NEXT", UI_FONT_XS, UI_COL_WHITE);
+    lv_obj_set_style_bg_color(s_calHeroTag, lv_color_hex(UI_COL_ACCENT), 0);
     lv_obj_set_style_bg_opa(s_calHeroTag, LV_OPA_COVER, 0);
     lv_obj_set_style_pad_hor(s_calHeroTag, 8, 0);
     lv_obj_set_style_pad_ver(s_calHeroTag, 2, 0);
     lv_obj_set_style_radius(s_calHeroTag, 6, 0);
     lv_obj_align(s_calHeroTag, LV_ALIGN_TOP_LEFT, 14, 10);
 
-    s_calHeroTitle = lv_label_create(s_calHero);
-    lv_label_set_text(s_calHeroTitle, "");
-    lv_obj_set_style_text_font(s_calHeroTitle, &lv_font_montserrat_20, 0);
-    lv_obj_set_style_text_color(s_calHeroTitle, lv_color_hex(0xffffff), 0);
+    s_calHeroTitle = ui_make_label(s_calHero, "", UI_FONT_LG, UI_COL_WHITE);
     lv_label_set_long_mode(s_calHeroTitle, LV_LABEL_LONG_DOT);
     lv_obj_set_width(s_calHeroTitle, rowW - 28);
     lv_obj_align(s_calHeroTitle, LV_ALIGN_TOP_LEFT, 14, 34);
 
-    s_calHeroWhen = lv_label_create(s_calHero);
-    lv_label_set_text(s_calHeroWhen, "");
-    lv_obj_set_style_text_font(s_calHeroWhen, &lv_font_montserrat_16, 0);
-    lv_obj_set_style_text_color(s_calHeroWhen, lv_color_hex(0x9fd0ff), 0);
+    s_calHeroWhen = ui_make_label(s_calHero, "", UI_FONT_MD, 0x9fd0ff);
     lv_obj_align(s_calHeroWhen, LV_ALIGN_TOP_LEFT, 14, 60);
 
     lv_obj_add_flag(s_calHero, LV_OBJ_FLAG_CLICKABLE);
@@ -1871,20 +1764,16 @@ static void build_calendar(lv_obj_t *pg) {
         lv_obj_t *r = lv_obj_create(s_calList);
         lv_obj_set_size(r, rowW, rowH);
         lv_obj_set_pos(r, 0, i * (rowH + gap));
-        lv_obj_set_style_bg_color(r, lv_color_hex(0x141c2e), 0);
+        lv_obj_set_style_bg_color(r, lv_color_hex(UI_COL_CARD_BG), 0);
         lv_obj_set_style_border_width(r, 0, 0);
         lv_obj_set_style_radius(r, 8, 0);
         lv_obj_clear_flag(r, LV_OBJ_FLAG_SCROLLABLE);
         s_calRow[i] = r;
 
-        s_calWhen[i] = lv_label_create(r);
-        lv_obj_set_style_text_font(s_calWhen[i], &lv_font_montserrat_14, 0);
-        lv_obj_set_style_text_color(s_calWhen[i], lv_color_hex(0x7fd1ff), 0);
+        s_calWhen[i] = ui_make_label(r, "", UI_FONT_SM, UI_COL_ACCENT_CY);
         lv_obj_align(s_calWhen[i], LV_ALIGN_LEFT_MID, 6, 0);
 
-        s_calTitle[i] = lv_label_create(r);
-        lv_obj_set_style_text_font(s_calTitle[i], &lv_font_montserrat_16, 0);
-        lv_obj_set_style_text_color(s_calTitle[i], lv_color_hex(0xe6ebf5), 0);
+        s_calTitle[i] = ui_make_label(r, "", UI_FONT_MD, UI_COL_TEXT);
         lv_label_set_long_mode(s_calTitle[i], LV_LABEL_LONG_DOT);
         lv_obj_set_width(s_calTitle[i], rowW - 160);
         lv_obj_align(s_calTitle[i], LV_ALIGN_LEFT_MID, 140, 0);
@@ -1901,10 +1790,7 @@ static void build_calendar(lv_obj_t *pg) {
         const int cellH = (PAGE_H - gridY - 8) / 6;
         static const char *DOW[7] = {"Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"};
         for (int c = 0; c < 7; c++) {
-            lv_obj_t *d = lv_label_create(pg);
-            lv_label_set_text(d, DOW[c]);
-            lv_obj_set_style_text_font(d, &lv_font_montserrat_12, 0);
-            lv_obj_set_style_text_color(d, lv_color_hex(0x8b97b0), 0);
+            lv_obj_t *d = ui_make_label(pg, DOW[c], UI_FONT_XS, UI_COL_TEXT_MUTE);
             lv_obj_set_width(d, cellW);
             lv_obj_set_style_text_align(d, LV_TEXT_ALIGN_CENTER, 0);
             lv_obj_align(d, LV_ALIGN_TOP_LEFT, c * cellW, 44);
@@ -1923,9 +1809,9 @@ static void build_calendar(lv_obj_t *pg) {
             lv_obj_t *cell = lv_obj_create(s_calGrid);
             lv_obj_set_size(cell, cellW - 4, cellH - 4);
             lv_obj_set_pos(cell, cc * cellW, rr * cellH);
-            lv_obj_set_style_bg_color(cell, lv_color_hex(0x141c2e), 0);
+            lv_obj_set_style_bg_color(cell, lv_color_hex(UI_COL_CARD_BG), 0);
             lv_obj_set_style_border_width(cell, 0, 0);
-            lv_obj_set_style_border_color(cell, lv_color_hex(0x2f80ed), 0);
+            lv_obj_set_style_border_color(cell, lv_color_hex(UI_COL_ACCENT), 0);
             lv_obj_set_style_radius(cell, 6, 0);
             lv_obj_set_style_pad_all(cell, 0, 0);
             lv_obj_clear_flag(cell, LV_OBJ_FLAG_SCROLLABLE);
@@ -1933,17 +1819,11 @@ static void build_calendar(lv_obj_t *pg) {
             lv_obj_add_event_cb(cell, cal_cell_cb, LV_EVENT_CLICKED, (void *)(intptr_t)i);
             s_calCell[i] = cell;
 
-            lv_obj_t *num = lv_label_create(cell);
-            lv_label_set_text(num, "");
-            lv_obj_set_style_text_font(num, &lv_font_montserrat_14, 0);
-            lv_obj_set_style_text_color(num, lv_color_hex(0xe6ebf5), 0);
+            lv_obj_t *num = ui_make_label(cell, "", UI_FONT_SM, UI_COL_TEXT);
             lv_obj_align(num, LV_ALIGN_TOP_LEFT, 5, 3);
             s_calCellNum[i] = num;
 
-            lv_obj_t *cnt = lv_label_create(cell);
-            lv_label_set_text(cnt, "");
-            lv_obj_set_style_text_font(cnt, &lv_font_montserrat_14, 0);
-            lv_obj_set_style_text_color(cnt, lv_color_hex(0x7fd1ff), 0);
+            lv_obj_t *cnt = ui_make_label(cell, "", UI_FONT_SM, UI_COL_ACCENT_CY);
             lv_obj_align(cnt, LV_ALIGN_BOTTOM_RIGHT, -5, -3);
             s_calCellCnt[i] = cnt;
         }
@@ -1954,25 +1834,19 @@ static void build_calendar(lv_obj_t *pg) {
     s_calCard = lv_obj_create(pg);
     lv_obj_set_size(s_calCard, 400, 220);
     lv_obj_align(s_calCard, LV_ALIGN_CENTER, 0, -6);
-    lv_obj_set_style_bg_color(s_calCard, lv_color_hex(0x141c2e), 0);
-    lv_obj_set_style_border_color(s_calCard, lv_color_hex(0x2f80ed), 0);
+    lv_obj_set_style_bg_color(s_calCard, lv_color_hex(UI_COL_CARD_BG), 0);
+    lv_obj_set_style_border_color(s_calCard, lv_color_hex(UI_COL_ACCENT), 0);
     lv_obj_set_style_border_width(s_calCard, 2, 0);
     lv_obj_set_style_radius(s_calCard, 12, 0);
     lv_obj_set_style_pad_all(s_calCard, 16, 0);
     lv_obj_clear_flag(s_calCard, LV_OBJ_FLAG_SCROLLABLE);
 
-    s_calCardTitle = lv_label_create(s_calCard);
-    lv_label_set_text(s_calCardTitle, "");
-    lv_obj_set_style_text_font(s_calCardTitle, &lv_font_montserrat_20, 0);
-    lv_obj_set_style_text_color(s_calCardTitle, lv_color_hex(0xffffff), 0);
+    s_calCardTitle = ui_make_label(s_calCard, "", UI_FONT_LG, UI_COL_WHITE);
     lv_label_set_long_mode(s_calCardTitle, LV_LABEL_LONG_WRAP);
     lv_obj_set_width(s_calCardTitle, 330);
     lv_obj_align(s_calCardTitle, LV_ALIGN_TOP_LEFT, 0, 0);
 
-    s_calCardBody = lv_label_create(s_calCard);
-    lv_label_set_text(s_calCardBody, "");
-    lv_obj_set_style_text_font(s_calCardBody, &lv_font_montserrat_16, 0);
-    lv_obj_set_style_text_color(s_calCardBody, lv_color_hex(0xcdd6ea), 0);
+    s_calCardBody = ui_make_label(s_calCard, "", UI_FONT_MD, UI_COL_TEXT_SEC);
     lv_obj_set_style_text_line_space(s_calCardBody, 4, 0);
     lv_label_set_long_mode(s_calCardBody, LV_LABEL_LONG_WRAP);
     lv_obj_set_width(s_calCardBody, 366);
@@ -2025,58 +1899,40 @@ static lv_obj_t *make_ring(lv_obj_t *parent, int size, int arcW, int maxVal) {
     lv_obj_set_style_arc_width(a, arcW, LV_PART_MAIN);
     lv_obj_set_style_arc_color(a, lv_color_hex(0x24304a), LV_PART_MAIN);
     lv_obj_set_style_arc_width(a, arcW, LV_PART_INDICATOR);
-    lv_obj_set_style_arc_color(a, lv_color_hex(0x39d98a), LV_PART_INDICATOR);
+    lv_obj_set_style_arc_color(a, lv_color_hex(UI_COL_GOOD), LV_PART_INDICATOR);
     return a;
 }
 
 static void build_air(lv_obj_t *pg) {
     const int CW = LV_HOR_RES - SIDEBAR_W - 36;
 
-    s_airStatus = lv_label_create(pg);
-    lv_label_set_text(s_airStatus, "Loading air quality...");
-    lv_obj_set_style_text_color(s_airStatus, lv_color_hex(0x8b97b0), 0);
-    lv_obj_set_style_text_font(s_airStatus, &lv_font_montserrat_12, 0);
+    s_airStatus = ui_make_label(pg, "Loading air quality...", UI_FONT_XS, UI_COL_TEXT_MUTE);
     lv_obj_align(s_airStatus, LV_ALIGN_TOP_LEFT, 0, 2);
 
-    // US AQI ring gauge (left).
-    s_airAqiArc = make_ring(pg, 180, 15, 300);
+    // US AQI ring gauge (left). Matches the UV dial: same diameter, font, top edge.
+    s_airAqiArc = make_ring(pg, 160, 15, 300);
     lv_obj_align(s_airAqiArc, LV_ALIGN_TOP_LEFT, 4, 14);
 
-    s_airAqi = lv_label_create(s_airAqiArc);
-    lv_label_set_text(s_airAqi, "--");
-    lv_obj_set_style_text_font(s_airAqi, &lv_font_montserrat_48, 0);
-    lv_obj_set_style_text_color(s_airAqi, lv_color_hex(0xe6ebf5), 0);
-    lv_obj_align(s_airAqi, LV_ALIGN_CENTER, 0, -10);
+    s_airAqi = ui_make_label(s_airAqiArc, "--", UI_FONT_XL, UI_COL_TEXT);
+    lv_obj_align(s_airAqi, LV_ALIGN_CENTER, 0, -6);
 
-    lv_obj_t *aqiUnit = lv_label_create(s_airAqiArc);
-    lv_label_set_text(aqiUnit, "US AQI");
-    lv_obj_set_style_text_font(aqiUnit, &lv_font_montserrat_12, 0);
-    lv_obj_set_style_text_color(aqiUnit, lv_color_hex(0x8b97b0), 0);
-    lv_obj_align(aqiUnit, LV_ALIGN_CENTER, 0, 26);
+    lv_obj_t *aqiUnit = ui_make_label(s_airAqiArc, "US AQI", UI_FONT_XS, UI_COL_TEXT_MUTE);
+    lv_obj_align(aqiUnit, LV_ALIGN_CENTER, 0, 22);
 
-    s_airCat = lv_label_create(pg);
-    lv_label_set_text(s_airCat, "");
+    s_airCat = ui_make_label(pg, "", UI_FONT_MD, UI_COL_TEXT);
     lv_obj_set_width(s_airCat, 168);
     lv_obj_set_style_text_align(s_airCat, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_style_text_font(s_airCat, &lv_font_montserrat_16, 0);
-    lv_obj_set_style_text_color(s_airCat, lv_color_hex(0xe6ebf5), 0);
     lv_obj_align(s_airCat, LV_ALIGN_TOP_LEFT, 6, 198);
 
-    // UV index ring gauge (right).
-    s_airUvArc = make_ring(pg, 128, 13, 12);
-    lv_obj_align(s_airUvArc, LV_ALIGN_TOP_RIGHT, -8, 24);
+    // UV index ring gauge (right). Matches the AQI dial: same diameter, font, top edge.
+    s_airUvArc = make_ring(pg, 160, 15, 12);
+    lv_obj_align(s_airUvArc, LV_ALIGN_TOP_RIGHT, -8, 14);
 
-    s_airUv = lv_label_create(s_airUvArc);
-    lv_label_set_text(s_airUv, "--");
-    lv_obj_set_style_text_font(s_airUv, &lv_font_montserrat_28, 0);
-    lv_obj_set_style_text_color(s_airUv, lv_color_hex(0xe6ebf5), 0);
+    s_airUv = ui_make_label(s_airUvArc, "--", UI_FONT_XL, UI_COL_TEXT);
     lv_obj_align(s_airUv, LV_ALIGN_CENTER, 0, -6);
 
-    lv_obj_t *uvName = lv_label_create(s_airUvArc);
-    lv_label_set_text(uvName, "UV");
-    lv_obj_set_style_text_font(uvName, &lv_font_montserrat_12, 0);
-    lv_obj_set_style_text_color(uvName, lv_color_hex(0x8b97b0), 0);
-    lv_obj_align(uvName, LV_ALIGN_CENTER, 0, 20);
+    lv_obj_t *uvName = ui_make_label(s_airUvArc, "UV", UI_FONT_XS, UI_COL_TEXT_MUTE);
+    lv_obj_align(uvName, LV_ALIGN_CENTER, 0, 22);
 
     lv_obj_t **slots[4] = { &s_airPm25, &s_airPm10, &s_airO3, &s_airNo2 };
     const char *names[4] = { "PM2.5", "PM10", "Ozone", "NO2" };
@@ -2085,21 +1941,15 @@ static void build_air(lv_obj_t *pg) {
         lv_obj_t *r = lv_obj_create(pg);
         lv_obj_set_size(r, rowW, rowH);
         lv_obj_set_pos(r, 0, y0 + i * (rowH + gap));
-        lv_obj_set_style_bg_color(r, lv_color_hex(0x141c2e), 0);
+        lv_obj_set_style_bg_color(r, lv_color_hex(UI_COL_CARD_BG), 0);
         lv_obj_set_style_border_width(r, 0, 0);
         lv_obj_set_style_radius(r, 8, 0);
         lv_obj_clear_flag(r, LV_OBJ_FLAG_SCROLLABLE);
 
-        lv_obj_t *nm = lv_label_create(r);
-        lv_label_set_text(nm, names[i]);
-        lv_obj_set_style_text_font(nm, &lv_font_montserrat_16, 0);
-        lv_obj_set_style_text_color(nm, lv_color_hex(0x8b97b0), 0);
+        lv_obj_t *nm = ui_make_label(r, names[i], UI_FONT_MD, UI_COL_TEXT_MUTE);
         lv_obj_align(nm, LV_ALIGN_LEFT_MID, 10, 0);
 
-        lv_obj_t *val = lv_label_create(r);
-        lv_label_set_text(val, "-- ug/m3");
-        lv_obj_set_style_text_font(val, &lv_font_montserrat_16, 0);
-        lv_obj_set_style_text_color(val, lv_color_hex(0xe6ebf5), 0);
+        lv_obj_t *val = ui_make_label(r, "-- ug/m3", UI_FONT_MD, UI_COL_TEXT);
         lv_obj_align(val, LV_ALIGN_RIGHT_MID, -12, 0);
         *slots[i] = val;
     }
@@ -2178,10 +2028,7 @@ static void diag_sample() {
 
 // A labeled horizontal usage bar (name + track + value) for the Diag resource block.
 static lv_obj_t *make_stat_bar(lv_obj_t *pg, const char *name, int x, int y, lv_obj_t **valOut) {
-    lv_obj_t *nm = lv_label_create(pg);
-    lv_label_set_text(nm, name);
-    lv_obj_set_style_text_font(nm, &lv_font_montserrat_14, 0);
-    lv_obj_set_style_text_color(nm, lv_color_hex(0xcdd6ea), 0);
+    lv_obj_t *nm = ui_make_label(pg, name, UI_FONT_SM, UI_COL_TEXT_SEC);
     lv_obj_align(nm, LV_ALIGN_TOP_LEFT, x, y);
 
     lv_obj_t *bar = lv_bar_create(pg);
@@ -2194,10 +2041,7 @@ static lv_obj_t *make_stat_bar(lv_obj_t *pg, const char *name, int x, int y, lv_
     lv_bar_set_range(bar, 0, 100);
     lv_bar_set_value(bar, 0, LV_ANIM_OFF);
 
-    lv_obj_t *v = lv_label_create(pg);
-    lv_label_set_text(v, "--");
-    lv_obj_set_style_text_font(v, &lv_font_montserrat_12, 0);
-    lv_obj_set_style_text_color(v, lv_color_hex(0x8b97b0), 0);
+    lv_obj_t *v = ui_make_label(pg, "--", UI_FONT_XS, UI_COL_TEXT_MUTE);
     lv_obj_align(v, LV_ALIGN_TOP_LEFT, x + 214, y + 1);
     *valOut = v;
     return bar;
@@ -2214,34 +2058,22 @@ static void set_stat_bar(lv_obj_t *bar, lv_obj_t *val, int pct, const char *txt)
 }
 
 static void build_diag(lv_obj_t *pg) {
-    lv_obj_t *title = lv_label_create(pg);
-    lv_label_set_text(title, "Diagnostics");
-    lv_obj_set_style_text_font(title, &lv_font_montserrat_20, 0);
-    lv_obj_set_style_text_color(title, lv_color_hex(0xe6ebf5), 0);
+    lv_obj_t *title = ui_make_label(pg, "Diagnostics", UI_FONT_LG, UI_COL_TEXT);
     lv_obj_align(title, LV_ALIGN_TOP_LEFT, 0, 2);
 
     // ---- Left column: device text stats + board-only trend charts. ----
     const int LX = 0, LSW = 340, LSH = 56;
 
-    s_diagLbl = lv_label_create(pg);
-    lv_label_set_text(s_diagLbl, "Collecting device stats...");
-    lv_obj_set_style_text_font(s_diagLbl, &lv_font_montserrat_14, 0);
-    lv_obj_set_style_text_color(s_diagLbl, lv_color_hex(0xcdd6ea), 0);
+    s_diagLbl = ui_make_label(pg, "Collecting device stats...", UI_FONT_SM, UI_COL_TEXT_SEC);
     lv_obj_set_style_text_line_space(s_diagLbl, 4, 0);
     lv_obj_align(s_diagLbl, LV_ALIGN_TOP_LEFT, LX, 34);
 
     // ESP32-S3 on-die temperature sensor trend (canvas bufs live in PSRAM).
     static lv_color_t *tBuf = nullptr, *fBuf = nullptr;
 
-    lv_obj_t *tt = lv_label_create(pg);
-    lv_label_set_text(tt, "Die temp (F)");
-    lv_obj_set_style_text_font(tt, &lv_font_montserrat_14, 0);
-    lv_obj_set_style_text_color(tt, lv_color_hex(0x8b97b0), 0);
+    lv_obj_t *tt = ui_make_label(pg, "Die temp (F)", UI_FONT_SM, UI_COL_TEXT_MUTE);
     lv_obj_align(tt, LV_ALIGN_TOP_LEFT, LX, 206);
-    s_diagTempVal = lv_label_create(pg);
-    lv_label_set_text(s_diagTempVal, "--");
-    lv_obj_set_style_text_font(s_diagTempVal, &lv_font_montserrat_16, 0);
-    lv_obj_set_style_text_color(s_diagTempVal, lv_color_hex(0xffb454), 0);
+    s_diagTempVal = ui_make_label(pg, "--", UI_FONT_MD, UI_COL_WARN);
     lv_obj_align(s_diagTempVal, LV_ALIGN_TOP_LEFT, LX + LSW - 56, 204);
     if (!tBuf) tBuf = (lv_color_t *)heap_caps_malloc(
         LSW * LSH * sizeof(lv_color_t), MALLOC_CAP_SPIRAM);
@@ -2251,15 +2083,9 @@ static void build_diag(lv_obj_t *pg) {
     lv_canvas_fill_bg(s_diagTempSpark, lv_color_hex(0x141c2e), LV_OPA_COVER);
 
     // Measured render FPS trend.
-    lv_obj_t *ft = lv_label_create(pg);
-    lv_label_set_text(ft, "Render (FPS)");
-    lv_obj_set_style_text_font(ft, &lv_font_montserrat_14, 0);
-    lv_obj_set_style_text_color(ft, lv_color_hex(0x8b97b0), 0);
+    lv_obj_t *ft = ui_make_label(pg, "Render (FPS)", UI_FONT_SM, UI_COL_TEXT_MUTE);
     lv_obj_align(ft, LV_ALIGN_TOP_LEFT, LX, 296);
-    s_diagFpsVal = lv_label_create(pg);
-    lv_label_set_text(s_diagFpsVal, "--");
-    lv_obj_set_style_text_font(s_diagFpsVal, &lv_font_montserrat_16, 0);
-    lv_obj_set_style_text_color(s_diagFpsVal, lv_color_hex(0xa78bfa), 0);
+    s_diagFpsVal = ui_make_label(pg, "--", UI_FONT_MD, 0xa78bfa);
     lv_obj_align(s_diagFpsVal, LV_ALIGN_TOP_LEFT, LX + LSW - 56, 294);
     if (!fBuf) fBuf = (lv_color_t *)heap_caps_malloc(
         LSW * LSH * sizeof(lv_color_t), MALLOC_CAP_SPIRAM);
@@ -2272,15 +2098,9 @@ static void build_diag(lv_obj_t *pg) {
     static lv_color_t *heapBuf = nullptr, *rssiBuf = nullptr;
     const int RX = 360;
 
-    lv_obj_t *ht = lv_label_create(pg);
-    lv_label_set_text(ht, "Free heap (KB)");
-    lv_obj_set_style_text_font(ht, &lv_font_montserrat_14, 0);
-    lv_obj_set_style_text_color(ht, lv_color_hex(0x8b97b0), 0);
+    lv_obj_t *ht = ui_make_label(pg, "Free heap (KB)", UI_FONT_SM, UI_COL_TEXT_MUTE);
     lv_obj_align(ht, LV_ALIGN_TOP_LEFT, RX, 34);
-    s_diagHeapVal = lv_label_create(pg);
-    lv_label_set_text(s_diagHeapVal, "--");
-    lv_obj_set_style_text_font(s_diagHeapVal, &lv_font_montserrat_16, 0);
-    lv_obj_set_style_text_color(s_diagHeapVal, lv_color_hex(0x39d98a), 0);
+    s_diagHeapVal = ui_make_label(pg, "--", UI_FONT_MD, UI_COL_GOOD);
     lv_obj_align(s_diagHeapVal, LV_ALIGN_TOP_LEFT, RX + DSP_W - 70, 32);
     if (!heapBuf) heapBuf = (lv_color_t *)heap_caps_malloc(
         DSP_W * DSP_H * sizeof(lv_color_t), MALLOC_CAP_SPIRAM);
@@ -2289,15 +2109,9 @@ static void build_diag(lv_obj_t *pg) {
     lv_obj_align(s_diagHeapSpark, LV_ALIGN_TOP_LEFT, RX, 58);
     lv_canvas_fill_bg(s_diagHeapSpark, lv_color_hex(0x141c2e), LV_OPA_COVER);
 
-    lv_obj_t *rt = lv_label_create(pg);
-    lv_label_set_text(rt, "Wi-Fi RSSI (dBm)");
-    lv_obj_set_style_text_font(rt, &lv_font_montserrat_14, 0);
-    lv_obj_set_style_text_color(rt, lv_color_hex(0x8b97b0), 0);
+    lv_obj_t *rt = ui_make_label(pg, "Wi-Fi RSSI (dBm)", UI_FONT_SM, UI_COL_TEXT_MUTE);
     lv_obj_align(rt, LV_ALIGN_TOP_LEFT, RX, 128);
-    s_diagRssiVal = lv_label_create(pg);
-    lv_label_set_text(s_diagRssiVal, "--");
-    lv_obj_set_style_text_font(s_diagRssiVal, &lv_font_montserrat_16, 0);
-    lv_obj_set_style_text_color(s_diagRssiVal, lv_color_hex(0x5aa9ff), 0);
+    s_diagRssiVal = ui_make_label(pg, "--", UI_FONT_MD, 0x5aa9ff);
     lv_obj_align(s_diagRssiVal, LV_ALIGN_TOP_LEFT, RX + DSP_W - 90, 126);
     if (!rssiBuf) rssiBuf = (lv_color_t *)heap_caps_malloc(
         DSP_W * DSP_H * sizeof(lv_color_t), MALLOC_CAP_SPIRAM);
@@ -2312,10 +2126,7 @@ static void build_diag(lv_obj_t *pg) {
     s_diagFlashBar = make_stat_bar(pg, "Flash", RX, 296, &s_diagFlashVal);
 
     // Wi-Fi signal strength: 4 ascending bars + quality caption.
-    lv_obj_t *sl = lv_label_create(pg);
-    lv_label_set_text(sl, "Signal");
-    lv_obj_set_style_text_font(sl, &lv_font_montserrat_14, 0);
-    lv_obj_set_style_text_color(sl, lv_color_hex(0x8b97b0), 0);
+    lv_obj_t *sl = ui_make_label(pg, "Signal", UI_FONT_SM, UI_COL_TEXT_MUTE);
     lv_obj_align(sl, LV_ALIGN_TOP_LEFT, RX, 330);
     const int bw = 16, bgap = 8, baseY = 396;
     for (int i = 0; i < 4; i++) {
@@ -2332,10 +2143,7 @@ static void build_diag(lv_obj_t *pg) {
         lv_obj_set_style_radius(s_diagSigBar[i], 3, LV_PART_INDICATOR);
         lv_obj_set_style_bg_color(s_diagSigBar[i], lv_color_hex(0x2a3550), LV_PART_INDICATOR);
     }
-    s_diagSigTxt = lv_label_create(pg);
-    lv_label_set_text(s_diagSigTxt, "--");
-    lv_obj_set_style_text_font(s_diagSigTxt, &lv_font_montserrat_16, 0);
-    lv_obj_set_style_text_color(s_diagSigTxt, lv_color_hex(0x8b97b0), 0);
+    s_diagSigTxt = ui_make_label(pg, "--", UI_FONT_MD, UI_COL_TEXT_MUTE);
     lv_obj_align(s_diagSigTxt, LV_ALIGN_TOP_LEFT, RX + 64 + 4 * (bw + bgap) + 14, baseY - 26);
 }
 
@@ -2364,21 +2172,15 @@ static void build_alert_overlay() {
 
     const int textW = LV_HOR_RES - 28 - 180;   // leave room for the Acknowledge button
 
-    s_alertEvent = lv_label_create(s_alertBar);
-    lv_obj_set_style_text_font(s_alertEvent, &lv_font_montserrat_20, 0);
-    lv_obj_set_style_text_color(s_alertEvent, lv_color_hex(0xffffff), 0);
+    s_alertEvent = ui_make_label(s_alertBar, "", UI_FONT_LG, UI_COL_WHITE);
     lv_label_set_long_mode(s_alertEvent, LV_LABEL_LONG_DOT);
     lv_obj_set_width(s_alertEvent, textW);
     lv_obj_align(s_alertEvent, LV_ALIGN_TOP_LEFT, 0, 0);
-    lv_label_set_text(s_alertEvent, "");
 
-    s_alertHead = lv_label_create(s_alertBar);
-    lv_obj_set_style_text_font(s_alertHead, &lv_font_montserrat_14, 0);
-    lv_obj_set_style_text_color(s_alertHead, lv_color_hex(0xffffff), 0);
+    s_alertHead = ui_make_label(s_alertBar, "", UI_FONT_SM, UI_COL_WHITE);
     lv_label_set_long_mode(s_alertHead, LV_LABEL_LONG_WRAP);
     lv_obj_set_width(s_alertHead, textW);
     lv_obj_align(s_alertHead, LV_ALIGN_TOP_LEFT, 0, 32);
-    lv_label_set_text(s_alertHead, "");
 
     lv_obj_t *ack = lv_btn_create(s_alertBar);
     lv_obj_set_size(ack, 168, 56);
