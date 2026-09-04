@@ -86,6 +86,20 @@ static const char CONFIG_PAGE[] PROGMEM = R"HTML(<!DOCTYPE html>
     </fieldset>
 
     <fieldset>
+      <legend>Severe weather alerts <small>(US only)</small></legend>
+      <div class="chk"><input id="alertsEnabled" type="checkbox"><label style="margin:0">Pop up severe weather alerts</label></div>
+      <label>Minimum severity to alert on</label>
+      <select id="alertMinSeverity">
+        <option value="4">Extreme only</option>
+        <option value="3">Severe &amp; above</option>
+        <option value="2">Moderate &amp; above</option>
+        <option value="1">Minor &amp; above (all)</option>
+      </select>
+      <label>Auto-dismiss after (minutes, 0 = never)</label>
+      <input id="alertDismissMin" type="number" min="0" max="1440">
+    </fieldset>
+
+    <fieldset>
       <legend>Device</legend>
       <label>Brightness (0&ndash;255)</label>
       <input id="brightness" type="number" min="10" max="255">
@@ -100,8 +114,9 @@ static const char CONFIG_PAGE[] PROGMEM = R"HTML(<!DOCTYPE html>
 <script>
 const $ = id => document.getElementById(id);
 const fields = ["wifiSsid","locationName","homeLat","homeLon","radarRangeNm","icsUrl",
-  "tickers","pollSeconds","photoUrl","photoSeconds","brightness","configPin"];
-const bools  = ["useMetric","use24hClock"];
+  "tickers","pollSeconds","photoUrl","photoSeconds","brightness","configPin",
+  "alertMinSeverity","alertDismissMin"];
+const bools  = ["useMetric","use24hClock","alertsEnabled"];
 
 async function load() {
   const r = await fetch('/api/config'); const c = await r.json();
@@ -160,7 +175,7 @@ $('f').addEventListener('submit', async e => {
   fields.forEach(k => body[k] = $(k).value);
   bools.forEach(k => body[k] = $(k).checked);
   ['homeLat','homeLon'].forEach(k => body[k] = parseFloat(body[k]));
-  ['radarRangeNm','pollSeconds','photoSeconds','brightness'].forEach(k => body[k] = parseInt(body[k]||0));
+  ['radarRangeNm','pollSeconds','photoSeconds','brightness','alertMinSeverity','alertDismissMin'].forEach(k => body[k] = parseInt(body[k]||0));
   if (!body.wifiPass) delete body.wifiPass; else {}
   body.wifiPass = $('wifiPass').value;
   if (!body.wifiPass) delete body.wifiPass;

@@ -1,4 +1,4 @@
-// data.cpp — Open-Meteo weather + adsb.fi flights, all keyless HTTPS.
+// data.cpp — Open-Meteo weather + adsb.fi flights + NWS severe-weather alerts, all keyless HTTPS.
 #include "data.h"
 #include "ui.h"
 #include "settings.h"
@@ -867,6 +867,63 @@ static void poll_photo() {
     ui_photo_refresh(ok, photo_status());
 }
 
+// --------------------------------------------------------------- wx alerts ---
+// US National Weather Service active alerts for the configured point. Polled
+// independently of the visible tab (see data_tick) so the banner can pop over
+// any page. NWS is US-only and keyless but REQUIRES a descriptive User-Agent;
+// a non-US point simply returns an empty feature list.
+static String s_alertId;   // NWS id currently presented ("" = none). Dedupe key.
+
+static int alert_sev_rank(const char *s) {
+    if (!s) return 0;
+    if (!strcmp(s, "Extreme"))  return 4;
+    if (!strcmp(s, "Severe"))   return 3;
+    if (!strcmp(s, "Moderate")) return 2;
+    if (!strcmp(s, "Minor"))    return 1;
+    return 0;   // "Unknown" / anything else
+}
+
+static void poll_alerts() {
+    char url[168];
+    snprintf(url, sizeof(url),
+        "https://api.weather.gov/alerts/active?status=actual&message_type=alert,update&point=%.4f,%.4f",
+        settings().homeLat, settings().homeLon);
+
+    // NWS alert bodies are multi-KB; keep only the fields we render.
+    StaticJsonDocument<256> filter;
+    JsonObject fp = filter["features"][0].createNestedObject("properties");
+    fp["id"] = true; fp["event"] = true; fp["severity"] = true; fp["headline"] = true;
+
+    static StaticJsonDocument<8192> doc;
+    doc.clear();
+    // NWS returns 403 without a descriptive User-Agent.
+    if (!http_get_json(url, doc, &filter,
+                       "CrowPanelHub/1.0 (github.com/howardginsburg/CrowPanel-Hub)"))
+        return;   // transient error: leave any current banner in place
+
+    int floorSev = settings().alertMinSeverity;
+    const char *bestId = "", *bestEvent = "", *bestHead = "";
+    int bestRank = -1;
+    for (JsonObject f : doc["features"].as<JsonArray>()) {
+        JsonObject p = f["properties"];
+        int r = alert_sev_rank(p["severity"] | "");
+        if (r < floorSev || r <= bestRank) continue;
+        bestRank  = r;
+        bestId    = p["id"]       | "";
+        bestEvent = p["event"]    | "";
+        bestHead  = p["headline"] | "";
+    }
+
+    if (bestRank < 0) {                       // nothing at/above the floor
+        if (s_alertId.length()) { s_alertId = ""; ui_alert_clear(); }
+        return;
+    }
+    if (s_alertId != bestId) {                // new/updated alert -> present it
+        s_alertId = bestId;                   // same id later won't re-pop (respects ack)
+        ui_alert_set(bestRank, String(bestEvent), String(bestHead));
+    }
+}
+
 // --------------------------------------------------------------------- tick ---
 // ----------------------------------------------------------------- tick ---
 // One poller per tab. Only the focused tab's source is refreshed; DIAG/CONFIG
@@ -917,6 +974,16 @@ void data_tick() {
         s_primeLastMs = millis();
         poll_weather();
         s_poll[PAGE_WEATHER].lastMs = millis();
+    }
+
+    // Severe-weather alerts (NWS): poll independently of the focused tab so the
+    // banner can appear over any page. Disabled -> clear any showing banner.
+    static uint32_t s_alertLastMs = 0;
+    if (!settings().alertsEnabled) {
+        if (s_alertId.length()) { s_alertId = ""; ui_alert_clear(); }
+    } else if (s_alertLastMs == 0 || millis() - s_alertLastMs >= 120000UL) {
+        s_alertLastMs = millis();
+        poll_alerts();
     }
 
     // Out-of-band one-off refreshes (radar zoom / ticker timeframe changed).

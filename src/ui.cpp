@@ -42,6 +42,12 @@ static lv_obj_t *s_topWifi;                          // Wi-Fi signal bars (top b
 static lv_obj_t *s_topWifiBar[4];
 static Page      s_active = PAGE_LAUNCHER;
 
+// Severe-weather alert banner (lives on lv_layer_top so it floats over any page).
+static lv_obj_t *s_alertBar   = nullptr;
+static lv_obj_t *s_alertEvent = nullptr;
+static lv_obj_t *s_alertHead  = nullptr;
+static uint32_t  s_alertShownMs = 0;
+
 // Widgets we update at runtime
 static lv_obj_t *s_clockTime;
 static lv_obj_t *s_clockDate;
@@ -2333,6 +2339,82 @@ static void build_diag(lv_obj_t *pg) {
     lv_obj_align(s_diagSigTxt, LV_ALIGN_TOP_LEFT, RX + 64 + 4 * (bw + bgap) + 14, baseY - 26);
 }
 
+// ---------------------------------------------------------------------------
+// Severe weather alert overlay (NWS)
+// ---------------------------------------------------------------------------
+// A banner parented to lv_layer_top() so it floats above ANY page and the top
+// bar. Shown by ui_alert_set() when the data layer sees a new qualifying alert;
+// hidden on Acknowledge or after settings().alertDismissMin (see ui_tick()).
+static void alert_ack_cb(lv_event_t *) {
+    if (s_alertBar) lv_obj_add_flag(s_alertBar, LV_OBJ_FLAG_HIDDEN);
+}
+
+static void build_alert_overlay() {
+    lv_obj_t *top = lv_layer_top();
+    s_alertBar = lv_obj_create(top);
+    lv_obj_set_size(s_alertBar, LV_HOR_RES, 128);
+    lv_obj_set_pos(s_alertBar, 0, 0);
+    lv_obj_set_style_bg_color(s_alertBar, lv_color_hex(0xc62828), 0);
+    lv_obj_set_style_bg_opa(s_alertBar, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(s_alertBar, 0, 0);
+    lv_obj_set_style_radius(s_alertBar, 0, 0);
+    lv_obj_set_style_pad_all(s_alertBar, 14, 0);
+    lv_obj_clear_flag(s_alertBar, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(s_alertBar, LV_OBJ_FLAG_HIDDEN);
+
+    const int textW = LV_HOR_RES - 28 - 180;   // leave room for the Acknowledge button
+
+    s_alertEvent = lv_label_create(s_alertBar);
+    lv_obj_set_style_text_font(s_alertEvent, &lv_font_montserrat_20, 0);
+    lv_obj_set_style_text_color(s_alertEvent, lv_color_hex(0xffffff), 0);
+    lv_label_set_long_mode(s_alertEvent, LV_LABEL_LONG_DOT);
+    lv_obj_set_width(s_alertEvent, textW);
+    lv_obj_align(s_alertEvent, LV_ALIGN_TOP_LEFT, 0, 0);
+    lv_label_set_text(s_alertEvent, "");
+
+    s_alertHead = lv_label_create(s_alertBar);
+    lv_obj_set_style_text_font(s_alertHead, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_color(s_alertHead, lv_color_hex(0xffffff), 0);
+    lv_label_set_long_mode(s_alertHead, LV_LABEL_LONG_WRAP);
+    lv_obj_set_width(s_alertHead, textW);
+    lv_obj_align(s_alertHead, LV_ALIGN_TOP_LEFT, 0, 32);
+    lv_label_set_text(s_alertHead, "");
+
+    lv_obj_t *ack = lv_btn_create(s_alertBar);
+    lv_obj_set_size(ack, 168, 56);
+    lv_obj_align(ack, LV_ALIGN_RIGHT_MID, 0, 0);
+    lv_obj_set_style_bg_color(ack, lv_color_hex(0x1c2331), 0);
+    lv_obj_set_style_radius(ack, 8, 0);
+    lv_obj_add_event_cb(ack, alert_ack_cb, LV_EVENT_CLICKED, nullptr);
+    lv_obj_t *al = lv_label_create(ack);
+    lv_label_set_text(al, LV_SYMBOL_OK "  Acknowledge");
+    lv_obj_center(al);
+}
+
+void ui_alert_set(int severity, const String &event, const String &headline) {
+    UiLock _lk;
+    if (!s_alertBar) return;
+    uint32_t bg;
+    switch (severity) {
+        case 4:  bg = 0x8b0000; break;   // Extreme  - dark red
+        case 3:  bg = 0xc62828; break;   // Severe   - red
+        case 2:  bg = 0xef6c00; break;   // Moderate - orange
+        case 1:  bg = 0xf9a825; break;   // Minor    - amber
+        default: bg = 0x546e7a; break;   // Unknown  - slate
+    }
+    lv_obj_set_style_bg_color(s_alertBar, lv_color_hex(bg), 0);
+    if (s_alertEvent) lv_label_set_text(s_alertEvent, (String(LV_SYMBOL_WARNING "  ") + event).c_str());
+    if (s_alertHead)  lv_label_set_text(s_alertHead, headline.length() ? headline.c_str() : event.c_str());
+    lv_obj_move_foreground(s_alertBar);
+    lv_obj_clear_flag(s_alertBar, LV_OBJ_FLAG_HIDDEN);
+    s_alertShownMs = millis();
+}
+
+void ui_alert_clear() {
+    UiLock _lk;
+    if (s_alertBar) lv_obj_add_flag(s_alertBar, LV_OBJ_FLAG_HIDDEN);
+}
+
 void ui_init() {
     if (!s_lvglMutex) s_lvglMutex = xSemaphoreCreateRecursiveMutex();
     lv_obj_t *scr = lv_scr_act();
@@ -2366,6 +2448,8 @@ void ui_init() {
         lv_obj_add_flag(sp, LV_OBJ_FLAG_HIDDEN);
         s_pageSpin[p] = sp;
     }
+
+    build_alert_overlay();   // global severe-weather banner (hidden until an alert)
 
     // Restore the last-selected panel (first boot / bad value -> launcher).
     Page start = (Page)settings().lastPanel;
@@ -2610,6 +2694,13 @@ void ui_tick() {
     update_config_page();
     update_diag_page();
     if (s_active == PAGE_CALENDAR) update_cal_hero();
+
+    // Auto-dismiss the severe-weather banner after its configured window.
+    if (s_alertBar && !lv_obj_has_flag(s_alertBar, LV_OBJ_FLAG_HIDDEN)) {
+        uint16_t mins = settings().alertDismissMin;
+        if (mins && millis() - s_alertShownMs >= (uint32_t)mins * 60000UL)
+            lv_obj_add_flag(s_alertBar, LV_OBJ_FLAG_HIDDEN);
+    }
 }
 
 // ---------------------------------------------------------------------------

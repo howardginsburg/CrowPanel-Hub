@@ -90,3 +90,10 @@ void ui_hourly_set(HourCell *cells, int count);
 // Called by the data layer after a fetch: repaints the canvas on success, or
 // shows the status text (from photo_status()) on failure.
 void ui_photo_refresh(bool ok, const char *status);
+
+// ---- Severe weather alert overlay (NWS) ----
+// Draws a banner on the global top layer (over any page + top bar). severity is
+// 1=Minor .. 4=Extreme (drives the banner color). Auto-dismisses on Acknowledge
+// or after settings().alertDismissMin. Safe to call from the net task.
+void ui_alert_set(int severity, const String &event, const String &headline);
+void ui_alert_clear();

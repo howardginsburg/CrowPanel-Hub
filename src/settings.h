@@ -25,6 +25,11 @@ struct Settings {
     String   photoUrl;         // JPEG source (blank = built-in nature default)
     uint16_t photoSeconds;     // rotate cadence (>= 10s)
 
+    // Severe weather alerts (US only, NWS)
+    bool     alertsEnabled;    // show the severe-weather banner
+    uint8_t  alertMinSeverity; // floor: 1=Minor,2=Moderate,3=Severe,4=Extreme
+    uint16_t alertDismissMin;  // auto-dismiss after N minutes (0 = never)
+
     // Device
     uint8_t  brightness;       // 0..255
     uint16_t pollSeconds;      // data refresh cadence

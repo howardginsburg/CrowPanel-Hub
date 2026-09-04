@@ -20,6 +20,9 @@ static void apply_defaults() {
     s_cfg.use24hClock  = true;
     s_cfg.photoUrl     = "";
     s_cfg.photoSeconds = 60;
+    s_cfg.alertsEnabled    = true;
+    s_cfg.alertMinSeverity = 3;      // Severe & above
+    s_cfg.alertDismissMin  = 10;
     s_cfg.brightness   = 200;
     s_cfg.pollSeconds  = 60;
     s_cfg.tickerTf     = 0;
@@ -45,6 +48,9 @@ void settings_load() {
     s_cfg.photoSeconds = s_prefs.getUShort("photoSec", s_cfg.photoSeconds);
     s_cfg.brightness   = s_prefs.getUChar ("bright",   s_cfg.brightness);
     s_cfg.pollSeconds  = s_prefs.getUShort("poll",     s_cfg.pollSeconds);
+    s_cfg.alertsEnabled    = s_prefs.getBool  ("alrtOn",  s_cfg.alertsEnabled);
+    s_cfg.alertMinSeverity = s_prefs.getUChar ("alrtSev", s_cfg.alertMinSeverity);
+    s_cfg.alertDismissMin  = s_prefs.getUShort("alrtDis", s_cfg.alertDismissMin);
     s_cfg.tickerTf     = s_prefs.getUChar ("tickTf",   s_cfg.tickerTf);
     s_cfg.calView      = s_prefs.getUChar ("calView",  s_cfg.calView);
     s_cfg.lastPanel    = s_prefs.getUChar ("lastPage", s_cfg.lastPanel);
@@ -68,6 +74,9 @@ void settings_save() {
     s_prefs.putUShort("photoSec", s_cfg.photoSeconds);
     s_prefs.putUChar ("bright",   s_cfg.brightness);
     s_prefs.putUShort("poll",     s_cfg.pollSeconds);
+    s_prefs.putBool  ("alrtOn",  s_cfg.alertsEnabled);
+    s_prefs.putUChar ("alrtSev", s_cfg.alertMinSeverity);
+    s_prefs.putUShort("alrtDis", s_cfg.alertDismissMin);
     s_prefs.putUChar ("tickTf",   s_cfg.tickerTf);
     s_prefs.putUChar ("calView",  s_cfg.calView);
     s_prefs.putUChar ("lastPage", s_cfg.lastPanel);
@@ -130,12 +139,17 @@ bool settings_import_json(const String &json) {
     if (doc.containsKey("photoSeconds")) s_cfg.photoSeconds = doc["photoSeconds"].as<uint16_t>();
     if (doc.containsKey("brightness"))   s_cfg.brightness   = doc["brightness"].as<uint8_t>();
     if (doc.containsKey("pollSeconds"))  s_cfg.pollSeconds  = doc["pollSeconds"].as<uint16_t>();
+    if (doc.containsKey("alertsEnabled"))    s_cfg.alertsEnabled    = doc["alertsEnabled"].as<bool>();
+    if (doc.containsKey("alertMinSeverity")) s_cfg.alertMinSeverity = doc["alertMinSeverity"].as<uint8_t>();
+    if (doc.containsKey("alertDismissMin"))  s_cfg.alertDismissMin  = doc["alertDismissMin"].as<uint16_t>();
     if (doc.containsKey("configPin"))    s_cfg.configPin    = doc["configPin"].as<String>();
 
     // Clamp to safe ranges.
     if (s_cfg.radarRangeNm > 250) s_cfg.radarRangeNm = 250;
     if (s_cfg.pollSeconds  < 20)  s_cfg.pollSeconds  = 20;
     if (s_cfg.photoSeconds < 10)  s_cfg.photoSeconds = 10;
+    if (s_cfg.alertMinSeverity < 1 || s_cfg.alertMinSeverity > 4) s_cfg.alertMinSeverity = 3;
+    if (s_cfg.alertDismissMin > 1440) s_cfg.alertDismissMin = 1440;
     return true;
 }
 
@@ -156,6 +170,9 @@ String settings_export_json() {
     doc["photoSeconds"]  = s_cfg.photoSeconds;
     doc["brightness"]    = s_cfg.brightness;
     doc["pollSeconds"]   = s_cfg.pollSeconds;
+    doc["alertsEnabled"]    = s_cfg.alertsEnabled;
+    doc["alertMinSeverity"] = s_cfg.alertMinSeverity;
+    doc["alertDismissMin"]  = s_cfg.alertDismissMin;
     doc["pinSet"]        = s_cfg.configPin.length() > 0;
     String out;
     serializeJson(doc, out);
