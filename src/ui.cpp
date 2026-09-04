@@ -44,55 +44,36 @@ static lv_obj_t *s_topWifiBar[4];
 static Page      s_active = PAGE_LAUNCHER;
 
 // Severe-weather alert banner (lives on lv_layer_top so it floats over any page).
-static lv_obj_t *s_alertBar   = nullptr;
-static lv_obj_t *s_alertEvent = nullptr;
-static lv_obj_t *s_alertHead  = nullptr;
-static uint32_t  s_alertShownMs = 0;
+static struct {                                       // severe-weather banner (lv_layer_top)
+    lv_obj_t *bar;
+    lv_obj_t *event;
+    lv_obj_t *head;
+    uint32_t  shownMs;
+} s_alert;
 
 // Widgets we update at runtime
-static lv_obj_t *s_clockTime;
-static lv_obj_t *s_clockDate;
-static lv_obj_t *s_weatherBody;
-static lv_obj_t *s_wxDetail;                          // right column: feels-like + UV
-static lv_obj_t *s_wxIcon;
-static int       s_wxCode  = -1;                     // current weather code (for animation)
-static uint32_t  s_wxFrame = 0;                       // weather glyph animation frame
-static lv_obj_t *s_wxTemp;
-static lv_obj_t *s_wxLoc;
-static String    s_wxSummary;                         // conditions text (for body recompose)
-static int       s_wxHum     = 0;                     // humidity %% (for body recompose)
-static float     s_wxWindMph = 0;                     // wind mph (for body recompose)
-static float     s_wxFeelsF  = -1000;                 // apparent temp F (-1000 = none yet)
-static float     s_wxTempF   = -1000;                 // actual temp F (gates feels-like display)
-static float     s_wxUvIdx   = -1;                    // daily max UV (-1 = none yet)
-static lv_obj_t *s_wxCond;                            // conditions summary line (under location)
-static lv_obj_t *s_fcCard[UI_FORECAST_DAYS];
-static lv_obj_t *s_fcIcon[UI_FORECAST_DAYS];
-static lv_obj_t *s_fcDay[UI_FORECAST_DAYS];
-static lv_obj_t *s_fcTemp[UI_FORECAST_DAYS];
-static DayForecast s_forecast[UI_FORECAST_DAYS];
-static int       s_forecastCount = 0;
-static lv_obj_t *s_flightsTable;
-static lv_obj_t *s_flightsStatus;
-static lv_obj_t *s_flightsRadar;
-static lv_obj_t *s_flightsToggleLbl;
-static lv_obj_t *s_zoomIn;
-static lv_obj_t *s_zoomOut;
-static lv_obj_t *s_radarRangeLbl;
-static lv_obj_t *s_flightCard;
-static lv_obj_t *s_flightCardLbl;
-static lv_obj_t *s_flightHero;                       // nearest-aircraft callout (map view)
-static lv_obj_t *s_heroCallsign;
-static lv_obj_t *s_heroDist;
-static lv_obj_t *s_heroBody;
-static bool      s_flightsShowMap = true;
-static int       s_radarRangeNm = 0;                 // 0 = follow settings
-static FlightRow s_flightRows[UI_MAX_FLIGHTS];
-static int       s_flightCount = 0;
-static lv_coord_t s_planePx[UI_MAX_FLIGHTS];         // radar-local hit targets
-static lv_coord_t s_planePy[UI_MAX_FLIGHTS];
-static float      s_sweepDeg = 0.0f;                 // radar sweep-arm angle (deg)
-static lv_timer_t *s_radarTimer = nullptr;           // animates the sweep
+static struct {                                       // non-zero defaults re-init in build_home
+    lv_obj_t   *body;                                 // grid col A: humidity + wind
+    lv_obj_t   *detail;                               // right column: feels-like + UV
+    lv_obj_t   *icon;
+    int         code;                                 // current weather code (for animation); -1 = none
+    uint32_t    frame;                                // weather glyph animation frame
+    lv_obj_t   *temp;
+    lv_obj_t   *loc;
+    String      summary;                              // conditions text (for body recompose)
+    int         hum;                                  // humidity % (for body recompose)
+    float       windMph;                              // wind mph (for body recompose)
+    float       feelsF;                               // apparent temp F (-1000 = none yet)
+    float       tempF;                                // actual temp F (gates feels-like display)
+    float       uvIdx;                                // daily max UV (-1 = none yet)
+    lv_obj_t   *cond;                                 // conditions summary line (under location)
+    lv_obj_t   *fcCard[UI_FORECAST_DAYS];
+    lv_obj_t   *fcIcon[UI_FORECAST_DAYS];
+    lv_obj_t   *fcDay[UI_FORECAST_DAYS];
+    lv_obj_t   *fcTemp[UI_FORECAST_DAYS];
+    DayForecast forecast[UI_FORECAST_DAYS];
+    int         forecastCount;
+} s_wx;
 #define TRAIL_N 12
 struct PlaneTrail {                                  // per-aircraft flown path
     String   id;
@@ -101,97 +82,128 @@ struct PlaneTrail {                                  // per-aircraft flown path
     bool     used;
     uint32_t lastSeen;
 };
-static PlaneTrail s_trails[UI_MAX_FLIGHTS];
-static uint32_t   s_trailPoll = 0;
+static struct {
+    lv_obj_t  *table;
+    lv_obj_t  *status;
+    lv_obj_t  *radar;
+    lv_obj_t  *toggleLbl;
+    lv_obj_t  *zoomIn;
+    lv_obj_t  *zoomOut;
+    lv_obj_t  *rangeLbl;
+    lv_obj_t  *card;
+    lv_obj_t  *cardLbl;
+    lv_obj_t  *hero;                        // nearest-aircraft callout (map view)
+    lv_obj_t  *heroCallsign;
+    lv_obj_t  *heroDist;
+    lv_obj_t  *heroBody;
+    bool       showMap;                     // set true in build_flights (map is default)
+    int        rangeNm;                     // 0 = follow settings
+    FlightRow  rows[UI_MAX_FLIGHTS];
+    int        count;
+    lv_coord_t planePx[UI_MAX_FLIGHTS];     // radar-local hit targets
+    lv_coord_t planePy[UI_MAX_FLIGHTS];
+    float      sweepDeg;                    // radar sweep-arm angle (deg)
+    lv_timer_t *radarTimer;                 // animates the sweep
+    PlaneTrail trails[UI_MAX_FLIGHTS];
+    uint32_t   trailPoll;
+} s_fl;
 static void      draw_radar();
-static lv_obj_t *s_tickersStatus;
-static lv_obj_t *s_tkList;                           // scroll container for cards
-static lv_obj_t *s_tkCard[8];
-static lv_obj_t *s_tkSym[8];
-static lv_obj_t *s_tkName[8];
-static lv_obj_t *s_tkState[8];
-static lv_obj_t *s_tkPrice[8];
-static lv_obj_t *s_tkChange[8];
-static lv_obj_t *s_tkSpark[8];                       // sparkline canvases
-static lv_obj_t *s_tkBar[8];                         // window range bar
-static lv_obj_t *s_tkBarDot[8];                      // marker on the range bar
-static lv_obj_t *s_tkLo[8];
-static lv_obj_t *s_tkHi[8];
-static lv_obj_t *s_tfBtn[5];                         // timeframe selector buttons
-static int       s_tfIndex = 0;                      // 0=1D .. 4=1Y
-static lv_obj_t *s_calList;                          // calendar scroll container
-static lv_obj_t *s_calStatus;
-static lv_obj_t *s_calHero;                          // "up next" hero card
-static lv_obj_t *s_calHeroTag;                       // NOW / UP NEXT pill
-static lv_obj_t *s_calHeroTitle;
-static lv_obj_t *s_calHeroWhen;                      // absolute time + live countdown
-static lv_obj_t *s_calRow[UI_MAX_EVENTS];
-static lv_obj_t *s_calWhen[UI_MAX_EVENTS];
-static lv_obj_t *s_calTitle[UI_MAX_EVENTS];
-
+static struct {
+    lv_obj_t *status;       // quotes source line
+    lv_obj_t *list;         // scroll container for cards
+    lv_obj_t *card[8];
+    lv_obj_t *sym[8];
+    lv_obj_t *name[8];
+    lv_obj_t *state[8];
+    lv_obj_t *price[8];
+    lv_obj_t *change[8];
+    lv_obj_t *spark[8];     // sparkline canvases
+    lv_obj_t *bar[8];       // window range bar
+    lv_obj_t *barDot[8];    // marker on the range bar
+    lv_obj_t *lo[8];
+    lv_obj_t *hi[8];
+    lv_obj_t *tfBtn[5];     // timeframe selector buttons
+    int       tfIndex;      // 0=1D .. 4=1Y
+} s_tk;
 // Calendar views (List / Day / Week / Month), selectable like the ticker timeframe.
 enum { CAL_LIST = 0, CAL_DAY, CAL_WEEK, CAL_MONTH };
 #define CAL_CACHE_N 96                               // full event cache (decoupled from the row pool)
-static CalEvent  s_calAll[CAL_CACHE_N];              // all fetched events, sorted ascending
-static int       s_calAllCount = 0;
-static int       s_calRowMap[UI_MAX_EVENTS];         // visible row -> cache index
-static int       s_calView   = CAL_LIST;
-static long      s_calAnchor = 0;                    // an instant inside the shown period (0 = today)
-static lv_obj_t *s_calViewBtn[4];                    // List/Day/Week/Month selector
-static lv_obj_t *s_calNav;                           // prev / period / next / today header
-static lv_obj_t *s_calPeriodLbl;                     // current period caption
-static lv_obj_t *s_calGrid;                          // month-grid container
-static lv_obj_t *s_calDow[7];                        // month weekday headers
-static lv_obj_t *s_calCell[42];                      // month day cells
-static lv_obj_t *s_calCellNum[42];                   // day-of-month labels
-static lv_obj_t *s_calCellCnt[42];                   // per-day event count badge
-static long      s_calCellEpoch[42];                 // noon epoch of each month cell
-static lv_obj_t *s_calCard;                          // tap-to-open event detail popup
-static lv_obj_t *s_calCardTitle;
-static lv_obj_t *s_calCardBody;
-static int       s_calHeroIdx = -1;                  // event index shown by the hero
-static lv_obj_t *s_airStatus;                        // air-quality source line
-static lv_obj_t *s_airAqiArc;                         // US AQI ring gauge
-static lv_obj_t *s_airAqi;                            // AQI number (gauge center)
-static lv_obj_t *s_airCat;                            // AQI category text
-static lv_obj_t *s_airPm25;
-static lv_obj_t *s_airPm10;
-static lv_obj_t *s_airO3;
-static lv_obj_t *s_airNo2;
-static lv_obj_t *s_airUvArc;                          // UV ring gauge
-static lv_obj_t *s_airUv;                             // UV number (gauge center)
-static lv_obj_t *s_sunLabel;                          // sunrise/sunset row (Home)
-static lv_obj_t *s_moonLabel;                         // moon phase + illumination (Home)
-static lv_obj_t *s_skyCanvas;                         // day/night sky gradient (Home clock)
-static int       s_srMin = -1, s_ssMin = -1;          // sunrise/sunset (local minutes)
-static int       s_moonIdx = -1, s_moonPct = 0;       // moon phase index + illumination %
-static lv_obj_t *s_sunRiseLbl;                        // sunrise time, sun-path panel corner
-static lv_obj_t *s_sunSetLbl;                         // sunset time, sun-path panel corner
-static lv_obj_t *s_hrCell[UI_HOURLY_N];              // hourly strip cells (Home)
-static lv_obj_t *s_hrHour[UI_HOURLY_N];
-static lv_obj_t *s_hrTemp[UI_HOURLY_N];
-static lv_obj_t *s_hrPrecip[UI_HOURLY_N];
-static lv_obj_t *s_hrRain[UI_HOURLY_N];              // precip-probability fill bar
-static lv_obj_t *s_diagLbl;                           // diagnostics multiline body
-static lv_obj_t *s_diagHeapSpark;                     // free-heap trend canvas (Diag)
-static lv_obj_t *s_diagRssiSpark;                     // Wi-Fi RSSI trend canvas (Diag)
-static lv_obj_t *s_diagTempSpark, *s_diagTempVal;     // SoC die-temperature trend (Diag)
-static lv_obj_t *s_diagFpsSpark,  *s_diagFpsVal;      // render-FPS trend (Diag)
-static lv_obj_t *s_diagHeapVal;                       // current heap KB (Diag)
-static lv_obj_t *s_diagRssiVal;                       // current RSSI dBm (Diag)
-static lv_obj_t *s_diagRamBar,   *s_diagRamVal;       // internal-RAM usage bar (Diag)
-static lv_obj_t *s_diagPsramBar, *s_diagPsramVal;     // PSRAM usage bar (Diag)
-static lv_obj_t *s_diagFlashBar, *s_diagFlashVal;     // flash/sketch usage bar (Diag)
-static lv_obj_t *s_diagSigBar[4];                     // Wi-Fi signal strength bars (Diag)
-static lv_obj_t *s_diagSigTxt;                        // signal quality label (Diag)
+static struct {                                       // heroIdx re-init in build_calendar
+    lv_obj_t *list;         // calendar scroll container
+    lv_obj_t *status;
+    lv_obj_t *hero;         // "up next" hero card
+    lv_obj_t *heroTag;      // NOW / UP NEXT pill
+    lv_obj_t *heroTitle;
+    lv_obj_t *heroWhen;     // absolute time + live countdown
+    lv_obj_t *row[UI_MAX_EVENTS];
+    lv_obj_t *when[UI_MAX_EVENTS];
+    lv_obj_t *title[UI_MAX_EVENTS];
+    CalEvent  all[CAL_CACHE_N];      // all fetched events, sorted ascending
+    int       allCount;
+    int       rowMap[UI_MAX_EVENTS]; // visible row -> cache index
+    int       view;                  // current view (CAL_LIST..CAL_MONTH)
+    long      anchor;                // an instant inside the shown period (0 = today)
+    lv_obj_t *viewBtn[4];   // List/Day/Week/Month selector
+    lv_obj_t *nav;          // prev / period / next / today header
+    lv_obj_t *periodLbl;    // current period caption
+    lv_obj_t *grid;         // month-grid container
+    lv_obj_t *dow[7];       // month weekday headers
+    lv_obj_t *cell[42];     // month day cells
+    lv_obj_t *cellNum[42];  // day-of-month labels
+    lv_obj_t *cellCnt[42];  // per-day event count badge
+    long      cellEpoch[42];// noon epoch of each month cell
+    lv_obj_t *card;         // tap-to-open event detail popup
+    lv_obj_t *cardTitle;
+    lv_obj_t *cardBody;
+    int       heroIdx;      // event index shown by the hero (-1 = none)
+} s_cal;
+static struct {
+    lv_obj_t *status;   // air-quality source line
+    lv_obj_t *aqiArc;   // US AQI ring gauge
+    lv_obj_t *aqi;      // AQI number (gauge center)
+    lv_obj_t *cat;      // AQI category text
+    lv_obj_t *pm25;
+    lv_obj_t *pm10;
+    lv_obj_t *o3;
+    lv_obj_t *no2;
+    lv_obj_t *uvArc;    // UV ring gauge
+    lv_obj_t *uv;       // UV number (gauge center)
+} s_air;
+static struct {                                       // Home: clock/sky/sun/moon/hourly (non-zero defaults re-init in build_home)
+    lv_obj_t *clockTime;
+    lv_obj_t *clockDate;
+    lv_obj_t *sunLabel;      // sunrise/sunset row (Home)
+    lv_obj_t *moonLabel;     // moon phase + illumination (Home)
+    lv_obj_t *skyCanvas;     // day/night sky gradient (Home clock)
+    int       srMin, ssMin;  // sunrise/sunset (local minutes); -1 = none
+    int       moonIdx, moonPct; // moon phase index + illumination %
+    lv_obj_t *sunRiseLbl;    // sunrise time, sun-path panel corner
+    lv_obj_t *sunSetLbl;     // sunset time, sun-path panel corner
+    lv_obj_t *hrCell[UI_HOURLY_N];   // hourly strip cells (Home)
+    lv_obj_t *hrHour[UI_HOURLY_N];
+    lv_obj_t *hrTemp[UI_HOURLY_N];
+    lv_obj_t *hrPrecip[UI_HOURLY_N];
+    lv_obj_t *hrRain[UI_HOURLY_N];   // precip-probability fill bar
+} s_home;
 #define DIAG_N 120                                    // 120 samples @ 500ms = 60s window
 #define DSP_W  400
 #define DSP_H  56
-static float s_heapHist[DIAG_N];
-static float s_rssiHist[DIAG_N];
-static float s_tempHist[DIAG_N];                      // SoC die temperature (deg F)
-static float s_fpsHist[DIAG_N];                       // measured render FPS
-static int   s_diagCount = 0;
+// Diag page: device text stats, live trend sparklines, resource bars, signal.
+static struct {
+    lv_obj_t *lbl;                       // multiline device stats body
+    lv_obj_t *heapSpark, *heapVal;       // free-heap trend + current KB
+    lv_obj_t *rssiSpark, *rssiVal;       // Wi-Fi RSSI trend + current dBm
+    lv_obj_t *tempSpark, *tempVal;       // SoC die-temperature trend
+    lv_obj_t *fpsSpark,  *fpsVal;        // render-FPS trend
+    lv_obj_t *ramBar,    *ramVal;        // internal-RAM usage bar
+    lv_obj_t *psramBar,  *psramVal;      // PSRAM usage bar
+    lv_obj_t *flashBar,  *flashVal;      // flash/sketch usage bar
+    lv_obj_t *sigBar[4], *sigTxt;        // Wi-Fi signal strength bars + caption
+    float     heapHist[DIAG_N], rssiHist[DIAG_N];
+    float     tempHist[DIAG_N];          // SoC die temperature (deg F)
+    float     fpsHist[DIAG_N];           // measured render FPS
+    int       count;
+} s_diag;
 
 // Offline resilience (#1): once a source has shown good data, a later fetch
 // failure keeps the last-good screen instead of blanking it — only the status
@@ -199,13 +211,17 @@ static int   s_diagCount = 0;
 static bool s_wxHave = false, s_flightsHave = false, s_airHave = false;
 static bool s_tickersHave = false, s_calHave = false, s_photoHave = false;
 static lv_obj_t *s_pageSpin[PAGE_COUNT] = { nullptr };   // per-page loading spinners
-static lv_obj_t *s_cfgState;
-static lv_obj_t *s_cfgDetails;
-static lv_obj_t *s_cfgQr;
+static struct {
+    lv_obj_t *state;    // status headline
+    lv_obj_t *details;  // instructions body
+    lv_obj_t *qr;       // QR canvas
+} s_cfg;
 
 // Photo frame
-static lv_obj_t *s_photoCanvas;
-static lv_obj_t *s_photoStatus;
+static struct {
+    lv_obj_t *canvas;
+    lv_obj_t *status;
+} s_photo;
 
 static const char *PAGE_TITLES[PAGE_COUNT] = {
     "Home", "Weather", "Flights", "Calendar", "Tickers", "Air", "Photo", "Diag", "Config"
@@ -443,7 +459,7 @@ static uint32_t sky_mix(uint32_t a, uint32_t b, float t) {
 static void sky_disc(int cx, int cy, int r, uint32_t col) {
     lv_draw_rect_dsc_t d; lv_draw_rect_dsc_init(&d);
     d.bg_color = lv_color_hex(col); d.bg_opa = LV_OPA_COVER; d.radius = LV_RADIUS_CIRCLE;
-    lv_canvas_draw_rect(s_skyCanvas, cx - r, cy - r, 2 * r, 2 * r, &d);
+    lv_canvas_draw_rect(s_home.skyCanvas, cx - r, cy - r, 2 * r, 2 * r, &d);
 }
 static void sky_stars() {
     static const uint16_t SX[] = { 22, 60, 96, 140, 176, 212, 250, 292, 314, 46, 122, 202, 276, 84, 160, 236, 300, 30, 336, 372, 410, 446, 356, 428 };
@@ -452,7 +468,7 @@ static void sky_stars() {
     s.bg_color = lv_color_hex(0xdfe6f5); s.bg_opa = LV_OPA_70; s.radius = LV_RADIUS_CIRCLE;
     for (unsigned k = 0; k < sizeof(SX) / sizeof(SX[0]); k++)
         if (SY[k] < SKY_H - 34)                        // keep stars above the horizon line
-            lv_canvas_draw_rect(s_skyCanvas, SX[k], SY[k], 2, 2, &s);
+            lv_canvas_draw_rect(s_home.skyCanvas, SX[k], SY[k], 2, 2, &s);
 }
 // Phase-accurate moon: lit/dark split by an elliptical terminator from the
 // illuminated fraction (correct crescent AND gibbous), waxing lit on the right.
@@ -470,7 +486,7 @@ static void sky_moon(int cx, int cy, int r, int idx, int pct) {
             int px = cx + dx, py = cy + dy;
             if (px < 0 || px >= SKY_W || py < 0 || py >= SKY_H) continue;
             bool isLit = waxing ? (dx >= xt) : (dx <= -xt);
-            lv_canvas_set_px_color(s_skyCanvas, px, py, lv_color_hex(isLit ? lit : dark));
+            lv_canvas_set_px_color(s_home.skyCanvas, px, py, lv_color_hex(isLit ? lit : dark));
         }
     }
 }
@@ -481,14 +497,14 @@ static int sky_now_min() {
     return t.tm_hour * 60 + t.tm_min;
 }
 static void draw_sky(int nowMin) {
-    if (!s_skyCanvas) return;
+    if (!s_home.skyCanvas) return;
     const int TW = 45;                                 // twilight half-window (min)
     const uint32_t N_TOP = 0x070b1c, N_BOT = 0x131b2e; // night
     const uint32_t W_TOP = 0x243a6e, W_BOT = 0xef9f57; // dawn
     const uint32_t D_TOP = 0x1e5fbf, D_BOT = 0x88baee; // day
     const uint32_t K_TOP = 0x2a2450, K_BOT = 0xe8794a; // dusk
     uint32_t aT = N_TOP, aB = N_BOT, bT = N_TOP, bB = N_BOT; float t = 0;
-    int sr = s_srMin, ss = s_ssMin;
+    int sr = s_home.srMin, ss = s_home.ssMin;
     if (sr >= 0 && ss >= 0 && ss > sr) {
         if      (nowMin < sr - TW || nowMin > ss + TW) { }                                   // night
         else if (nowMin < sr)      { aT=N_TOP;aB=N_BOT; bT=W_TOP;bB=W_BOT; t=(float)(nowMin-(sr-TW))/TW; }
@@ -505,9 +521,9 @@ static void draw_sky(int nowMin) {
     // procedural (zero flash) and colour-only, so there is no layout risk. Deep
     // night and "no sun data" keep the clear/starfield look untouched.
     float cloudK = 0;
-    if (s_wxCode >= 0 && sr >= 0 && ss >= 0) {
+    if (s_wx.code >= 0 && sr >= 0 && ss >= 0) {
         uint32_t oT = 0, oB = 0;
-        switch (wx_type(s_wxCode)) {
+        switch (wx_type(s_wx.code)) {
             case WX_CLEAR:                            break;   // leave the blue sky
             case WX_PARTLY:  oT=0x6f80a0; oB=0xaebccf; cloudK=0.26f; break;
             case WX_CLOUD:   oT=0x5f6b80; oB=0x97a4ba; cloudK=0.55f; break;
@@ -534,7 +550,7 @@ static void draw_sky(int nowMin) {
     for (int y = 0; y < SKY_H; y++) {
         g.color = lv_color_hex(sky_mix(topC, botC, (float)y / (SKY_H - 1)));
         lv_point_t p[2] = {{0, (lv_coord_t)y}, {(lv_coord_t)(SKY_W - 1), (lv_coord_t)y}};
-        lv_canvas_draw_line(s_skyCanvas, p, 2, &g);
+        lv_canvas_draw_line(s_home.skyCanvas, p, 2, &g);
     }
 
     // Sun-path panel: a dotted daytime trajectory from the sunrise horizon to the
@@ -546,7 +562,7 @@ static void draw_sky(int nowMin) {
     lv_draw_line_dsc_t hl; lv_draw_line_dsc_init(&hl);
     hl.width = 1; hl.color = lv_color_hex(0x9fb0cc); hl.opa = LV_OPA_30;
     lv_point_t hp[2] = {{8, (lv_coord_t)baseY}, {(lv_coord_t)(SKY_W - 8), (lv_coord_t)baseY}};
-    lv_canvas_draw_line(s_skyCanvas, hp, 2, &hl);
+    lv_canvas_draw_line(s_home.skyCanvas, hp, 2, &hl);
 
     bool isDay = (sr >= 0 && ss >= 0 && nowMin >= sr && nowMin <= ss && ss > sr);
     lv_draw_rect_dsc_t dd; lv_draw_rect_dsc_init(&dd);
@@ -558,7 +574,7 @@ static void draw_sky(int nowMin) {
         float fr = i / 40.0f;
         int x = ax0 + (int)lroundf(fr * (ax1 - ax0));
         int y = baseY - (int)lroundf(sinf(fr * 3.14159265f) * arcH);
-        lv_canvas_draw_rect(s_skyCanvas, x - dsz / 2, y - dsz / 2, dsz, dsz, &dd);
+        lv_canvas_draw_rect(s_home.skyCanvas, x - dsz / 2, y - dsz / 2, dsz, dsz, &dd);
     }
     // Left = current leg's start horizon, right = its end: sunrise->sunset by
     // day, sunset->sunrise by night (matches the body's left-to-right travel).
@@ -577,70 +593,73 @@ static void draw_sky(int nowMin) {
         int dx = ax0 + (int)lroundf(fr * (ax1 - ax0));
         int dy = baseY - (int)lroundf(sinf(fr * 3.14159265f) * arcH * 0.85f);
         sky_stars();
-        sky_moon(dx, dy, 11, s_moonIdx, s_moonPct);
+        sky_moon(dx, dy, 11, s_home.moonIdx, s_home.moonPct);
     } else {
         sky_stars();
     }
 }
 
 static void build_home(lv_obj_t *pg) {
+    // Preserve the non-zero static defaults lost to zero-init of s_wx / s_home.
+    s_wx.code = -1; s_wx.feelsF = -1000; s_wx.tempF = -1000; s_wx.uvIdx = -1;
+    s_home.srMin = -1; s_home.ssMin = -1; s_home.moonIdx = -1;
     // Sun-path panel (top-left): day/night gradient with the sun/moon riding a
     // dotted trajectory, sunrise/sunset times pinned to the horizons.
     static lv_color_t *skyBuf = nullptr;
     if (!skyBuf) skyBuf = (lv_color_t *)heap_caps_malloc(
         SKY_W * SKY_H * sizeof(lv_color_t), MALLOC_CAP_SPIRAM);
-    s_skyCanvas = lv_canvas_create(pg);
-    lv_canvas_set_buffer(s_skyCanvas, skyBuf, SKY_W, SKY_H, LV_IMG_CF_TRUE_COLOR);
-    lv_obj_align(s_skyCanvas, LV_ALIGN_TOP_LEFT, 0, 0);
-    lv_obj_set_style_radius(s_skyCanvas, 10, 0);
-    lv_obj_set_style_clip_corner(s_skyCanvas, true, 0);
+    s_home.skyCanvas = lv_canvas_create(pg);
+    lv_canvas_set_buffer(s_home.skyCanvas, skyBuf, SKY_W, SKY_H, LV_IMG_CF_TRUE_COLOR);
+    lv_obj_align(s_home.skyCanvas, LV_ALIGN_TOP_LEFT, 0, 0);
+    lv_obj_set_style_radius(s_home.skyCanvas, 10, 0);
+    lv_obj_set_style_clip_corner(s_home.skyCanvas, true, 0);
     draw_sky(sky_now_min());
 
-    s_sunRiseLbl = ui_make_label(s_skyCanvas, "--", UI_FONT_XS, 0xffe0a8);
-    lv_obj_set_style_bg_color(s_sunRiseLbl, lv_color_hex(0x05070e), 0);
-    lv_obj_set_style_bg_opa(s_sunRiseLbl, LV_OPA_40, 0);
-    lv_obj_set_style_pad_hor(s_sunRiseLbl, 5, 0);
-    lv_obj_set_style_pad_ver(s_sunRiseLbl, 1, 0);
-    lv_obj_set_style_radius(s_sunRiseLbl, 4, 0);
-    lv_obj_align(s_sunRiseLbl, LV_ALIGN_BOTTOM_LEFT, 6, -4);
+    s_home.sunRiseLbl = ui_make_label(s_home.skyCanvas, "--", UI_FONT_XS, 0xffe0a8);
+    lv_obj_set_style_bg_color(s_home.sunRiseLbl, lv_color_hex(0x05070e), 0);
+    lv_obj_set_style_bg_opa(s_home.sunRiseLbl, LV_OPA_40, 0);
+    lv_obj_set_style_pad_hor(s_home.sunRiseLbl, 5, 0);
+    lv_obj_set_style_pad_ver(s_home.sunRiseLbl, 1, 0);
+    lv_obj_set_style_radius(s_home.sunRiseLbl, 4, 0);
+    lv_obj_align(s_home.sunRiseLbl, LV_ALIGN_BOTTOM_LEFT, 6, -4);
 
-    s_sunSetLbl = ui_make_label(s_skyCanvas, "--", UI_FONT_XS, 0xffc09a);
-    lv_obj_set_style_bg_color(s_sunSetLbl, lv_color_hex(0x05070e), 0);
-    lv_obj_set_style_bg_opa(s_sunSetLbl, LV_OPA_40, 0);
-    lv_obj_set_style_pad_hor(s_sunSetLbl, 5, 0);
-    lv_obj_set_style_pad_ver(s_sunSetLbl, 1, 0);
-    lv_obj_set_style_radius(s_sunSetLbl, 4, 0);
-    lv_obj_align(s_sunSetLbl, LV_ALIGN_BOTTOM_RIGHT, -6, -4);
+    s_home.sunSetLbl = ui_make_label(s_home.skyCanvas, "--", UI_FONT_XS, 0xffc09a);
+    lv_obj_set_style_bg_color(s_home.sunSetLbl, lv_color_hex(0x05070e), 0);
+    lv_obj_set_style_bg_opa(s_home.sunSetLbl, LV_OPA_40, 0);
+    lv_obj_set_style_pad_hor(s_home.sunSetLbl, 5, 0);
+    lv_obj_set_style_pad_ver(s_home.sunSetLbl, 1, 0);
+    lv_obj_set_style_radius(s_home.sunSetLbl, 4, 0);
+    lv_obj_align(s_home.sunSetLbl, LV_ALIGN_BOTTOM_RIGHT, -6, -4);
 
     // Current conditions (top-right): drawn icon + big temperature + details.
     static lv_color_t *wxBuf = nullptr;
     const int WX_PX = 96;
     if (!wxBuf) wxBuf = (lv_color_t *)heap_caps_malloc(
         WX_PX * WX_PX * sizeof(lv_color_t), MALLOC_CAP_SPIRAM);
-    s_wxIcon = lv_canvas_create(pg);
-    lv_canvas_set_buffer(s_wxIcon, wxBuf, WX_PX, WX_PX, LV_IMG_CF_TRUE_COLOR);
-    lv_obj_align(s_wxIcon, LV_ALIGN_TOP_RIGHT, 0, 0);
-    lv_canvas_fill_bg(s_wxIcon, lv_color_hex(0x0f1420), LV_OPA_COVER);
+    s_wx.icon = lv_canvas_create(pg);
+    lv_canvas_set_buffer(s_wx.icon, wxBuf, WX_PX, WX_PX, LV_IMG_CF_TRUE_COLOR);
+    lv_obj_align(s_wx.icon, LV_ALIGN_TOP_RIGHT, 0, 0);
+    lv_canvas_fill_bg(s_wx.icon, lv_color_hex(0x0f1420), LV_OPA_COVER);
 
-    s_wxTemp = ui_make_label(pg, "--", UI_FONT_XXL, UI_COL_TEXT);
-    lv_obj_align(s_wxTemp, LV_ALIGN_TOP_RIGHT, -104, 12);
+    s_wx.temp = ui_make_label(pg, "--", UI_FONT_XXL, UI_COL_TEXT);
+    lv_obj_align(s_wx.temp, LV_ALIGN_TOP_RIGHT, -104, 12);
 
-    s_wxLoc = ui_make_label(pg, "", UI_FONT_MD, UI_COL_TEXT_MUTE);
-    lv_obj_set_style_text_align(s_wxLoc, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_align(s_wxLoc, LV_ALIGN_TOP_MID, 303, 74);   // centered under temp + icon cluster
+    s_wx.loc = ui_make_label(pg, "", UI_FONT_MD, UI_COL_TEXT_MUTE);
+    lv_obj_set_style_text_align(s_wx.loc, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_align(s_wx.loc, LV_ALIGN_TOP_MID, 303, 74);   // centered under temp + icon cluster
 
-    s_wxCond = ui_make_label(pg, "Loading conditions...", UI_FONT_MD, UI_COL_TEXT_SEC);  // summary, centered under location
-    lv_obj_set_style_text_align(s_wxCond, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_align(s_wxCond, LV_ALIGN_TOP_MID, 303, 94);
+    s_wx.cond = ui_make_label(pg, "Loading conditions...", UI_FONT_MD, UI_COL_TEXT_SEC);  // summary, centered under location
+    lv_obj_set_style_text_align(s_wx.cond, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_align(s_wx.cond, LV_ALIGN_TOP_MID, 303, 94);
 
-    s_weatherBody = ui_make_label(pg, "", UI_FONT_MD, UI_COL_TEXT_SEC);  // grid col A: humidity + wind
-    lv_obj_set_style_text_align(s_weatherBody, LV_TEXT_ALIGN_RIGHT, 0);
-    lv_obj_align(s_weatherBody, LV_ALIGN_TOP_RIGHT, -150, 120);
+    s_wx.body = ui_make_label(pg, "", UI_FONT_MD, UI_COL_TEXT_SEC);  // grid col A: humidity + wind
+    lv_obj_set_style_text_align(s_wx.body, LV_TEXT_ALIGN_RIGHT, 0);
+    lv_obj_align(s_wx.body, LV_ALIGN_TOP_RIGHT, -150, 120);
 
-    s_wxDetail = ui_make_label(pg, "", UI_FONT_MD, UI_COL_TEXT_SEC);  // grid col B: feels-like + UV (recolored)
-    lv_label_set_recolor(s_wxDetail, true);
-    lv_obj_set_style_text_align(s_wxDetail, LV_TEXT_ALIGN_RIGHT, 0);
-    lv_obj_align(s_wxDetail, LV_ALIGN_TOP_RIGHT, 0, 120);
+    s_wx.detail = ui_make_label(pg, "", UI_FONT_MD, UI_COL_TEXT_SEC);  // grid col B: feels-like + UV (recolored)
+    lv_label_set_recolor(s_wx.detail, true);
+    lv_obj_set_style_text_align(s_wx.detail, LV_TEXT_ALIGN_RIGHT, 0);
+    lv_obj_align(s_wx.detail, LV_ALIGN_TOP_RIGHT, 0, 120);
 
     // 5-day forecast strip (bottom): one card per day.
     const int CW    = LV_HOR_RES - SIDEBAR_W - 36;
@@ -652,28 +671,28 @@ static void build_home(lv_obj_t *pg) {
     for (int i = 0; i < UI_FORECAST_DAYS; i++) {
         lv_obj_t *card = ui_make_card(pg, cardW, cardH, 8, 4);
         lv_obj_align(card, LV_ALIGN_BOTTOM_LEFT, i * (cardW + gap), 0);
-        s_fcCard[i] = card;
+        s_wx.fcCard[i] = card;
 
-        s_fcDay[i] = ui_make_label(card, "--", UI_FONT_SM, UI_COL_TEXT_DIM);
-        lv_obj_align(s_fcDay[i], LV_ALIGN_TOP_MID, 0, 2);
+        s_wx.fcDay[i] = ui_make_label(card, "--", UI_FONT_SM, UI_COL_TEXT_DIM);
+        lv_obj_align(s_wx.fcDay[i], LV_ALIGN_TOP_MID, 0, 2);
 
         if (!fcBuf[i]) fcBuf[i] = (lv_color_t *)heap_caps_malloc(
             IC * IC * sizeof(lv_color_t), MALLOC_CAP_SPIRAM);
-        s_fcIcon[i] = lv_canvas_create(card);
-        lv_canvas_set_buffer(s_fcIcon[i], fcBuf[i], IC, IC, LV_IMG_CF_TRUE_COLOR);
-        lv_obj_align(s_fcIcon[i], LV_ALIGN_CENTER, 0, -4);
-        lv_canvas_fill_bg(s_fcIcon[i], lv_color_hex(0x141c2e), LV_OPA_COVER);
+        s_wx.fcIcon[i] = lv_canvas_create(card);
+        lv_canvas_set_buffer(s_wx.fcIcon[i], fcBuf[i], IC, IC, LV_IMG_CF_TRUE_COLOR);
+        lv_obj_align(s_wx.fcIcon[i], LV_ALIGN_CENTER, 0, -4);
+        lv_canvas_fill_bg(s_wx.fcIcon[i], lv_color_hex(0x141c2e), LV_OPA_COVER);
 
-        s_fcTemp[i] = ui_make_label(card, "-/-", UI_FONT_SM, UI_COL_TEXT);
-        lv_obj_align(s_fcTemp[i], LV_ALIGN_BOTTOM_MID, 0, 0);
+        s_wx.fcTemp[i] = ui_make_label(card, "-/-", UI_FONT_SM, UI_COL_TEXT);
+        lv_obj_align(s_wx.fcTemp[i], LV_ALIGN_BOTTOM_MID, 0, 0);
     }
 
     // --- Astro summary (daylight + live countdown, moon phase) + hourly strip ---
-    s_sunLabel = ui_make_label(pg, "Daylight --", UI_FONT_SM, UI_COL_TEXT_SEC);
-    lv_obj_align(s_sunLabel, LV_ALIGN_TOP_LEFT, 0, 110);
+    s_home.sunLabel = ui_make_label(pg, "Daylight --", UI_FONT_SM, UI_COL_TEXT_SEC);
+    lv_obj_align(s_home.sunLabel, LV_ALIGN_TOP_LEFT, 0, 110);
 
-    s_moonLabel = ui_make_label(pg, "Moon phase: --", UI_FONT_SM, UI_COL_TEXT_MUTE);
-    lv_obj_align(s_moonLabel, LV_ALIGN_TOP_LEFT, 0, 132);
+    s_home.moonLabel = ui_make_label(pg, "Moon phase: --", UI_FONT_SM, UI_COL_TEXT_MUTE);
+    lv_obj_align(s_home.moonLabel, LV_ALIGN_TOP_LEFT, 0, 132);
 
     const int CWh  = LV_HOR_RES - SIDEBAR_W - 36;
     const int hgap = 4;
@@ -683,40 +702,40 @@ static void build_home(lv_obj_t *pg) {
     for (int i = 0; i < UI_HOURLY_N; i++) {
         lv_obj_t *c = ui_make_card(pg, hcW, hcH, 6, 2);
         lv_obj_align(c, LV_ALIGN_TOP_LEFT, i * (hcW + hgap), hcY);
-        s_hrCell[i] = c;
+        s_home.hrCell[i] = c;
 
-        s_hrRain[i] = lv_obj_create(c);               // precip fill, rises from bottom (behind labels)
-        lv_obj_set_size(s_hrRain[i], hcW - 4, 0);
-        lv_obj_align(s_hrRain[i], LV_ALIGN_BOTTOM_MID, 0, 0);
-        lv_obj_set_style_bg_color(s_hrRain[i], lv_color_hex(0x2b6cb0), 0);
-        lv_obj_set_style_bg_opa(s_hrRain[i], LV_OPA_40, 0);
-        lv_obj_set_style_border_width(s_hrRain[i], 0, 0);
-        lv_obj_set_style_radius(s_hrRain[i], 5, 0);
-        lv_obj_clear_flag(s_hrRain[i], LV_OBJ_FLAG_SCROLLABLE);
-        lv_obj_add_flag(s_hrRain[i], LV_OBJ_FLAG_HIDDEN);
+        s_home.hrRain[i] = lv_obj_create(c);               // precip fill, rises from bottom (behind labels)
+        lv_obj_set_size(s_home.hrRain[i], hcW - 4, 0);
+        lv_obj_align(s_home.hrRain[i], LV_ALIGN_BOTTOM_MID, 0, 0);
+        lv_obj_set_style_bg_color(s_home.hrRain[i], lv_color_hex(0x2b6cb0), 0);
+        lv_obj_set_style_bg_opa(s_home.hrRain[i], LV_OPA_40, 0);
+        lv_obj_set_style_border_width(s_home.hrRain[i], 0, 0);
+        lv_obj_set_style_radius(s_home.hrRain[i], 5, 0);
+        lv_obj_clear_flag(s_home.hrRain[i], LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_add_flag(s_home.hrRain[i], LV_OBJ_FLAG_HIDDEN);
 
-        s_hrHour[i] = ui_make_label(c, "--", UI_FONT_XS, UI_COL_TEXT_DIM);
-        lv_obj_align(s_hrHour[i], LV_ALIGN_TOP_MID, 0, 2);
+        s_home.hrHour[i] = ui_make_label(c, "--", UI_FONT_XS, UI_COL_TEXT_DIM);
+        lv_obj_align(s_home.hrHour[i], LV_ALIGN_TOP_MID, 0, 2);
 
-        s_hrTemp[i] = ui_make_label(c, "--", UI_FONT_SM, UI_COL_TEXT);
-        lv_obj_align(s_hrTemp[i], LV_ALIGN_CENTER, 0, 0);
+        s_home.hrTemp[i] = ui_make_label(c, "--", UI_FONT_SM, UI_COL_TEXT);
+        lv_obj_align(s_home.hrTemp[i], LV_ALIGN_CENTER, 0, 0);
 
-        s_hrPrecip[i] = ui_make_label(c, "", UI_FONT_XS, 0xcfe8ff);
-        lv_obj_align(s_hrPrecip[i], LV_ALIGN_BOTTOM_MID, 0, -2);
+        s_home.hrPrecip[i] = ui_make_label(c, "", UI_FONT_XS, 0xcfe8ff);
+        lv_obj_align(s_home.hrPrecip[i], LV_ALIGN_BOTTOM_MID, 0, -2);
     }
 }
 
 static int radar_range() {
-    if (s_radarRangeNm > 0) return s_radarRangeNm;
+    if (s_fl.rangeNm > 0) return s_fl.rangeNm;
     int r = settings().radarRangeNm;
     return r > 0 ? r : 25;
 }
 int ui_radar_range_nm() { return radar_range(); }
 
 static void update_radar_range_lbl() {
-    if (!s_radarRangeLbl) return;
+    if (!s_fl.rangeLbl) return;
     char b[24]; snprintf(b, sizeof(b), "%d NM", radar_range());
-    lv_label_set_text(s_radarRangeLbl, b);
+    lv_label_set_text(s_fl.rangeLbl, b);
 }
 
 static const char *compass8(int deg) {
@@ -727,21 +746,21 @@ static const char *compass8(int deg) {
 
 // Populate the nearest-aircraft callout (closest by distance); hidden in table view / no traffic.
 static void update_flight_hero() {
-    if (!s_flightHero) return;
-    if (!s_flightsShowMap || s_flightCount <= 0) {
-        lv_obj_add_flag(s_flightHero, LV_OBJ_FLAG_HIDDEN);
+    if (!s_fl.hero) return;
+    if (!s_fl.showMap || s_fl.count <= 0) {
+        lv_obj_add_flag(s_fl.hero, LV_OBJ_FLAG_HIDDEN);
         return;
     }
     int best = 0;
-    for (int i = 1; i < s_flightCount; i++)
-        if (s_flightRows[i].distNm < s_flightRows[best].distNm) best = i;
-    const FlightRow &f = s_flightRows[best];
+    for (int i = 1; i < s_fl.count; i++)
+        if (s_fl.rows[i].distNm < s_fl.rows[best].distNm) best = i;
+    const FlightRow &f = s_fl.rows[best];
 
     const char *id = f.tail.length() ? f.tail.c_str()
                    : (f.callsign.length() ? f.callsign.c_str() : "(unknown)");
-    lv_label_set_text(s_heroCallsign, id);
+    lv_label_set_text(s_fl.heroCallsign, id);
     char d[16]; snprintf(d, sizeof(d), "%d NM", f.distNm);
-    lv_label_set_text(s_heroDist, d);
+    lv_label_set_text(s_fl.heroDist, d);
 
     char alt[16];
     if (f.altFt >= 18000) snprintf(alt, sizeof(alt), "FL%03d", f.altFt / 100);
@@ -753,39 +772,39 @@ static void update_flight_hero() {
     snprintf(body, sizeof(body), "%s %03d\n%s\n%s\n%s",
              compass8(f.bearing), f.bearing,
              f.type.length() ? f.type.c_str() : "--", alt, spd);
-    lv_label_set_text(s_heroBody, body);
-    lv_obj_clear_flag(s_flightHero, LV_OBJ_FLAG_HIDDEN);
+    lv_label_set_text(s_fl.heroBody, body);
+    lv_obj_clear_flag(s_fl.hero, LV_OBJ_FLAG_HIDDEN);
 }
 
 static void flights_toggle_cb(lv_event_t *e) {
-    s_flightsShowMap = !s_flightsShowMap;
-    if (s_flightsShowMap) {
-        lv_obj_clear_flag(s_flightsRadar, LV_OBJ_FLAG_HIDDEN);
-        lv_obj_add_flag(s_flightsTable, LV_OBJ_FLAG_HIDDEN);
-        if (s_zoomIn)  lv_obj_clear_flag(s_zoomIn, LV_OBJ_FLAG_HIDDEN);
-        if (s_zoomOut) lv_obj_clear_flag(s_zoomOut, LV_OBJ_FLAG_HIDDEN);
-        if (s_radarRangeLbl) lv_obj_clear_flag(s_radarRangeLbl, LV_OBJ_FLAG_HIDDEN);
-        lv_label_set_text(s_flightsToggleLbl, LV_SYMBOL_LIST " Table");
+    s_fl.showMap = !s_fl.showMap;
+    if (s_fl.showMap) {
+        lv_obj_clear_flag(s_fl.radar, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_flag(s_fl.table, LV_OBJ_FLAG_HIDDEN);
+        if (s_fl.zoomIn)  lv_obj_clear_flag(s_fl.zoomIn, LV_OBJ_FLAG_HIDDEN);
+        if (s_fl.zoomOut) lv_obj_clear_flag(s_fl.zoomOut, LV_OBJ_FLAG_HIDDEN);
+        if (s_fl.rangeLbl) lv_obj_clear_flag(s_fl.rangeLbl, LV_OBJ_FLAG_HIDDEN);
+        lv_label_set_text(s_fl.toggleLbl, LV_SYMBOL_LIST " Table");
         update_flight_hero();
     } else {
-        lv_obj_add_flag(s_flightsRadar, LV_OBJ_FLAG_HIDDEN);
-        lv_obj_clear_flag(s_flightsTable, LV_OBJ_FLAG_HIDDEN);
-        if (s_zoomIn)  lv_obj_add_flag(s_zoomIn, LV_OBJ_FLAG_HIDDEN);
-        if (s_zoomOut) lv_obj_add_flag(s_zoomOut, LV_OBJ_FLAG_HIDDEN);
-        if (s_radarRangeLbl) lv_obj_add_flag(s_radarRangeLbl, LV_OBJ_FLAG_HIDDEN);
-        if (s_flightCard) lv_obj_add_flag(s_flightCard, LV_OBJ_FLAG_HIDDEN);
-        if (s_flightHero) lv_obj_add_flag(s_flightHero, LV_OBJ_FLAG_HIDDEN);
-        lv_label_set_text(s_flightsToggleLbl, LV_SYMBOL_UP " Map");
+        lv_obj_add_flag(s_fl.radar, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_clear_flag(s_fl.table, LV_OBJ_FLAG_HIDDEN);
+        if (s_fl.zoomIn)  lv_obj_add_flag(s_fl.zoomIn, LV_OBJ_FLAG_HIDDEN);
+        if (s_fl.zoomOut) lv_obj_add_flag(s_fl.zoomOut, LV_OBJ_FLAG_HIDDEN);
+        if (s_fl.rangeLbl) lv_obj_add_flag(s_fl.rangeLbl, LV_OBJ_FLAG_HIDDEN);
+        if (s_fl.card) lv_obj_add_flag(s_fl.card, LV_OBJ_FLAG_HIDDEN);
+        if (s_fl.hero) lv_obj_add_flag(s_fl.hero, LV_OBJ_FLAG_HIDDEN);
+        lv_label_set_text(s_fl.toggleLbl, LV_SYMBOL_UP " Map");
     }
 }
 
 static void card_close_cb(lv_event_t *e) {
-    if (s_flightCard) lv_obj_add_flag(s_flightCard, LV_OBJ_FLAG_HIDDEN);
+    if (s_fl.card) lv_obj_add_flag(s_fl.card, LV_OBJ_FLAG_HIDDEN);
 }
 
 static void show_flight_card(int i) {
-    if (i < 0 || i >= s_flightCount || !s_flightCard) return;
-    const FlightRow &r = s_flightRows[i];
+    if (i < 0 || i >= s_fl.count || !s_fl.card) return;
+    const FlightRow &r = s_fl.rows[i];
     String s = "#" + String(i + 1) + "  " + r.tail + "\n";
     if (r.callsign.length() && r.callsign != r.tail) s += "Call  " + r.callsign + "\n";
     s += "Type  " + (r.type.length() ? r.type : String("-")) + "\n";
@@ -796,26 +815,26 @@ static void show_flight_card(int i) {
     s += "Dist  " + String(r.distNm) + " NM   Brg " + String(r.bearing) + "\n";
     if (r.track >= 0) s += "Track " + String(r.track) + "\n";
     if (r.squawk.length()) s += "Sqwk  " + r.squawk;
-    lv_label_set_text(s_flightCardLbl, s.c_str());
-    lv_obj_clear_flag(s_flightCard, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_move_foreground(s_flightCard);
+    lv_label_set_text(s_fl.cardLbl, s.c_str());
+    lv_obj_clear_flag(s_fl.card, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_move_foreground(s_fl.card);
 }
 
 static void radar_click_cb(lv_event_t *e) {
     lv_indev_t *indev = lv_indev_get_act();
-    if (!indev || !s_flightsRadar) return;
+    if (!indev || !s_fl.radar) return;
     lv_point_t p; lv_indev_get_point(indev, &p);
-    lv_area_t a; lv_obj_get_coords(s_flightsRadar, &a);
+    lv_area_t a; lv_obj_get_coords(s_fl.radar, &a);
     int lx = (int)p.x - a.x1, ly = (int)p.y - a.y1;
     int best = -1; long bestd2 = 26L * 26L;   // tap tolerance ~26 px
-    for (int i = 0; i < s_flightCount; i++) {
-        if (s_planePx[i] < -1000) continue;
-        long dx = lx - s_planePx[i], dy = ly - s_planePy[i];
+    for (int i = 0; i < s_fl.count; i++) {
+        if (s_fl.planePx[i] < -1000) continue;
+        long dx = lx - s_fl.planePx[i], dy = ly - s_fl.planePy[i];
         long d2 = dx * dx + dy * dy;
         if (d2 <= bestd2) { bestd2 = d2; best = i; }
     }
     if (best >= 0) show_flight_card(best);
-    else if (s_flightCard) lv_obj_add_flag(s_flightCard, LV_OBJ_FLAG_HIDDEN);
+    else if (s_fl.card) lv_obj_add_flag(s_fl.card, LV_OBJ_FLAG_HIDDEN);
 }
 
 static const int RADAR_RANGES[] = {5, 10, 15, 25, 50, 100, 150, 250};
@@ -823,8 +842,8 @@ static void radar_zoom(int dir) {
     int cur = radar_range(), idx = 0, bestd = 100000;
     for (int i = 0; i < 8; i++) { int d = abs(RADAR_RANGES[i] - cur); if (d < bestd) { bestd = d; idx = i; } }
     idx += dir; if (idx < 0) idx = 0; if (idx > 7) idx = 7;
-    s_radarRangeNm = RADAR_RANGES[idx];
-    if (s_flightCard) lv_obj_add_flag(s_flightCard, LV_OBJ_FLAG_HIDDEN);
+    s_fl.rangeNm = RADAR_RANGES[idx];
+    if (s_fl.card) lv_obj_add_flag(s_fl.card, LV_OBJ_FLAG_HIDDEN);
     update_radar_range_lbl();
     draw_radar();
     data_request_flights();   // widen/narrow the fetch on the next loop tick
@@ -834,76 +853,77 @@ static void zoom_out_cb(lv_event_t *e) { radar_zoom(+1); }
 
 // Advances the radar sweep only while the Flights map view is on screen.
 static void radar_sweep_timer_cb(lv_timer_t *t) {
-    if (ui_active_page() != PAGE_FLIGHTS || !s_flightsShowMap) return;
-    if (!s_flightsRadar || lv_obj_has_flag(s_flightsRadar, LV_OBJ_FLAG_HIDDEN)) return;
-    s_sweepDeg += 6.0f;
-    if (s_sweepDeg >= 360.0f) s_sweepDeg -= 360.0f;
+    if (ui_active_page() != PAGE_FLIGHTS || !s_fl.showMap) return;
+    if (!s_fl.radar || lv_obj_has_flag(s_fl.radar, LV_OBJ_FLAG_HIDDEN)) return;
+    s_fl.sweepDeg += 6.0f;
+    if (s_fl.sweepDeg >= 360.0f) s_fl.sweepDeg -= 360.0f;
     draw_radar();
 }
 
 static void build_flights(lv_obj_t *pg) {
-    s_flightsStatus = ui_make_label(pg, "Scanning the sky...   data: adsb.fi", UI_FONT_XS, UI_COL_TEXT_MUTE);
-    lv_obj_align(s_flightsStatus, LV_ALIGN_TOP_LEFT, 0, 8);
+    s_fl.showMap = true;                              // map is the default view
+    s_fl.status = ui_make_label(pg, "Scanning the sky...   data: adsb.fi", UI_FONT_XS, UI_COL_TEXT_MUTE);
+    lv_obj_align(s_fl.status, LV_ALIGN_TOP_LEFT, 0, 8);
 
     // View toggle (top-right): radar map <-> table.
     lv_obj_t *tbtn = lv_btn_create(pg);
     lv_obj_align(tbtn, LV_ALIGN_TOP_RIGHT, 0, 0);
     lv_obj_set_style_bg_color(tbtn, lv_color_hex(0x2f7bff), 0);
     lv_obj_add_event_cb(tbtn, flights_toggle_cb, LV_EVENT_CLICKED, nullptr);
-    s_flightsToggleLbl = lv_label_create(tbtn);
-    lv_label_set_text(s_flightsToggleLbl, LV_SYMBOL_LIST " Table");
-    lv_obj_set_style_text_font(s_flightsToggleLbl, &lv_font_montserrat_14, 0);
-    lv_obj_center(s_flightsToggleLbl);
+    s_fl.toggleLbl = lv_label_create(tbtn);
+    lv_label_set_text(s_fl.toggleLbl, LV_SYMBOL_LIST " Table");
+    lv_obj_set_style_text_font(s_fl.toggleLbl, &lv_font_montserrat_14, 0);
+    lv_obj_center(s_fl.toggleLbl);
 
     // Radar canvas (default view). Buffer lives in PSRAM.
     static lv_color_t *radarBuf = nullptr;
     if (!radarBuf) radarBuf = (lv_color_t *)heap_caps_malloc(
         RADAR_PX * RADAR_PX * sizeof(lv_color_t), MALLOC_CAP_SPIRAM);
-    s_flightsRadar = lv_canvas_create(pg);
-    lv_canvas_set_buffer(s_flightsRadar, radarBuf, RADAR_PX, RADAR_PX, LV_IMG_CF_TRUE_COLOR);
-    lv_obj_align(s_flightsRadar, LV_ALIGN_TOP_MID, 0, 32);
-    lv_obj_add_flag(s_flightsRadar, LV_OBJ_FLAG_CLICKABLE);       // tap a plane for details
-    lv_obj_add_event_cb(s_flightsRadar, radar_click_cb, LV_EVENT_CLICKED, nullptr);
+    s_fl.radar = lv_canvas_create(pg);
+    lv_canvas_set_buffer(s_fl.radar, radarBuf, RADAR_PX, RADAR_PX, LV_IMG_CF_TRUE_COLOR);
+    lv_obj_align(s_fl.radar, LV_ALIGN_TOP_MID, 0, 32);
+    lv_obj_add_flag(s_fl.radar, LV_OBJ_FLAG_CLICKABLE);       // tap a plane for details
+    lv_obj_add_event_cb(s_fl.radar, radar_click_cb, LV_EVENT_CLICKED, nullptr);
 
     // Zoom controls + current range (right gutter, map view only).
-    s_radarRangeLbl = lv_label_create(pg);
-    lv_obj_set_style_text_color(s_radarRangeLbl, lv_color_hex(UI_COL_TEXT_MUTE), 0);
-    lv_obj_set_style_text_font(s_radarRangeLbl, UI_FONT_SM, 0);
-    lv_obj_align(s_radarRangeLbl, LV_ALIGN_BOTTOM_RIGHT, 0, -96);
+    s_fl.rangeLbl = lv_label_create(pg);
+    lv_obj_set_style_text_color(s_fl.rangeLbl, lv_color_hex(UI_COL_TEXT_MUTE), 0);
+    lv_obj_set_style_text_font(s_fl.rangeLbl, UI_FONT_SM, 0);
+    lv_obj_align(s_fl.rangeLbl, LV_ALIGN_BOTTOM_RIGHT, 0, -96);
 
-    s_zoomIn = lv_btn_create(pg);
-    lv_obj_set_size(s_zoomIn, 44, 40);
-    lv_obj_align(s_zoomIn, LV_ALIGN_BOTTOM_RIGHT, 0, -46);
-    lv_obj_set_style_bg_color(s_zoomIn, lv_color_hex(UI_COL_BTN_BG), 0);
-    lv_obj_add_event_cb(s_zoomIn, zoom_in_cb, LV_EVENT_CLICKED, nullptr);
-    lv_obj_t *ziLbl = lv_label_create(s_zoomIn);
+    s_fl.zoomIn = lv_btn_create(pg);
+    lv_obj_set_size(s_fl.zoomIn, 44, 40);
+    lv_obj_align(s_fl.zoomIn, LV_ALIGN_BOTTOM_RIGHT, 0, -46);
+    lv_obj_set_style_bg_color(s_fl.zoomIn, lv_color_hex(UI_COL_BTN_BG), 0);
+    lv_obj_add_event_cb(s_fl.zoomIn, zoom_in_cb, LV_EVENT_CLICKED, nullptr);
+    lv_obj_t *ziLbl = lv_label_create(s_fl.zoomIn);
     lv_label_set_text(ziLbl, LV_SYMBOL_PLUS);
     lv_obj_center(ziLbl);
 
-    s_zoomOut = lv_btn_create(pg);
-    lv_obj_set_size(s_zoomOut, 44, 40);
-    lv_obj_align(s_zoomOut, LV_ALIGN_BOTTOM_RIGHT, 0, 0);
-    lv_obj_set_style_bg_color(s_zoomOut, lv_color_hex(UI_COL_BTN_BG), 0);
-    lv_obj_add_event_cb(s_zoomOut, zoom_out_cb, LV_EVENT_CLICKED, nullptr);
-    lv_obj_t *zoLbl = lv_label_create(s_zoomOut);
+    s_fl.zoomOut = lv_btn_create(pg);
+    lv_obj_set_size(s_fl.zoomOut, 44, 40);
+    lv_obj_align(s_fl.zoomOut, LV_ALIGN_BOTTOM_RIGHT, 0, 0);
+    lv_obj_set_style_bg_color(s_fl.zoomOut, lv_color_hex(UI_COL_BTN_BG), 0);
+    lv_obj_add_event_cb(s_fl.zoomOut, zoom_out_cb, LV_EVENT_CLICKED, nullptr);
+    lv_obj_t *zoLbl = lv_label_create(s_fl.zoomOut);
     lv_label_set_text(zoLbl, LV_SYMBOL_MINUS);
     lv_obj_center(zoLbl);
 
     // Flight detail card (popup, hidden until a plane is tapped).
-    s_flightCard = lv_obj_create(pg);
-    lv_obj_set_size(s_flightCard, 214, 208);
-    lv_obj_align(s_flightCard, LV_ALIGN_CENTER, 0, -6);
-    lv_obj_set_style_bg_color(s_flightCard, lv_color_hex(UI_COL_CARD_BG), 0);
-    lv_obj_set_style_border_color(s_flightCard, lv_color_hex(UI_COL_ACCENT2), 0);
-    lv_obj_set_style_border_width(s_flightCard, 2, 0);
-    lv_obj_set_style_radius(s_flightCard, 8, 0);
-    lv_obj_set_style_pad_all(s_flightCard, 10, 0);
-    lv_obj_clear_flag(s_flightCard, LV_OBJ_FLAG_SCROLLABLE);
-    s_flightCardLbl = ui_make_label(s_flightCard, "", UI_FONT_SM, UI_COL_TEXT);
-    lv_obj_set_width(s_flightCardLbl, 160);
-    lv_label_set_long_mode(s_flightCardLbl, LV_LABEL_LONG_WRAP);
-    lv_obj_align(s_flightCardLbl, LV_ALIGN_TOP_LEFT, 0, 4);
-    lv_obj_t *xBtn = lv_btn_create(s_flightCard);
+    s_fl.card = lv_obj_create(pg);
+    lv_obj_set_size(s_fl.card, 214, 208);
+    lv_obj_align(s_fl.card, LV_ALIGN_CENTER, 0, -6);
+    lv_obj_set_style_bg_color(s_fl.card, lv_color_hex(UI_COL_CARD_BG), 0);
+    lv_obj_set_style_border_color(s_fl.card, lv_color_hex(UI_COL_ACCENT2), 0);
+    lv_obj_set_style_border_width(s_fl.card, 2, 0);
+    lv_obj_set_style_radius(s_fl.card, 8, 0);
+    lv_obj_set_style_pad_all(s_fl.card, 10, 0);
+    lv_obj_clear_flag(s_fl.card, LV_OBJ_FLAG_SCROLLABLE);
+    s_fl.cardLbl = ui_make_label(s_fl.card, "", UI_FONT_SM, UI_COL_TEXT);
+    lv_obj_set_width(s_fl.cardLbl, 160);
+    lv_label_set_long_mode(s_fl.cardLbl, LV_LABEL_LONG_WRAP);
+    lv_obj_align(s_fl.cardLbl, LV_ALIGN_TOP_LEFT, 0, 4);
+    lv_obj_t *xBtn = lv_btn_create(s_fl.card);
     lv_obj_set_size(xBtn, 26, 26);
     lv_obj_align(xBtn, LV_ALIGN_TOP_RIGHT, 4, -4);
     lv_obj_set_style_bg_color(xBtn, lv_color_hex(UI_COL_ACCENT2), 0);
@@ -911,60 +931,60 @@ static void build_flights(lv_obj_t *pg) {
     lv_obj_t *xLbl = lv_label_create(xBtn);
     lv_label_set_text(xLbl, LV_SYMBOL_CLOSE);
     lv_obj_center(xLbl);
-    lv_obj_add_flag(s_flightCard, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(s_fl.card, LV_OBJ_FLAG_HIDDEN);
 
     // Nearest-aircraft callout (left gutter, shown only in map view).
-    s_flightHero = lv_obj_create(pg);
-    lv_obj_set_size(s_flightHero, 104, 150);
-    lv_obj_align(s_flightHero, LV_ALIGN_TOP_LEFT, 0, 44);
-    lv_obj_set_style_bg_color(s_flightHero, lv_color_hex(UI_COL_CARD_BG), 0);
-    lv_obj_set_style_border_color(s_flightHero, lv_color_hex(UI_COL_ACCENT2), 0);
-    lv_obj_set_style_border_width(s_flightHero, 1, 0);
-    lv_obj_set_style_radius(s_flightHero, 8, 0);
-    lv_obj_set_style_pad_all(s_flightHero, 8, 0);
-    lv_obj_clear_flag(s_flightHero, LV_OBJ_FLAG_SCROLLABLE);
+    s_fl.hero = lv_obj_create(pg);
+    lv_obj_set_size(s_fl.hero, 104, 150);
+    lv_obj_align(s_fl.hero, LV_ALIGN_TOP_LEFT, 0, 44);
+    lv_obj_set_style_bg_color(s_fl.hero, lv_color_hex(UI_COL_CARD_BG), 0);
+    lv_obj_set_style_border_color(s_fl.hero, lv_color_hex(UI_COL_ACCENT2), 0);
+    lv_obj_set_style_border_width(s_fl.hero, 1, 0);
+    lv_obj_set_style_radius(s_fl.hero, 8, 0);
+    lv_obj_set_style_pad_all(s_fl.hero, 8, 0);
+    lv_obj_clear_flag(s_fl.hero, LV_OBJ_FLAG_SCROLLABLE);
 
-    lv_obj_t *htag = ui_make_label(s_flightHero, "NEAREST", UI_FONT_XS, UI_COL_ACCENT_CY);
+    lv_obj_t *htag = ui_make_label(s_fl.hero, "NEAREST", UI_FONT_XS, UI_COL_ACCENT_CY);
     lv_obj_align(htag, LV_ALIGN_TOP_LEFT, 0, 0);
 
-    s_heroCallsign = ui_make_label(s_flightHero, "--", UI_FONT_MD, UI_COL_TEXT);
-    lv_obj_align(s_heroCallsign, LV_ALIGN_TOP_LEFT, 0, 18);
+    s_fl.heroCallsign = ui_make_label(s_fl.hero, "--", UI_FONT_MD, UI_COL_TEXT);
+    lv_obj_align(s_fl.heroCallsign, LV_ALIGN_TOP_LEFT, 0, 18);
 
-    s_heroDist = ui_make_label(s_flightHero, "--", UI_FONT_MD, UI_COL_GOOD);
-    lv_obj_align(s_heroDist, LV_ALIGN_TOP_LEFT, 0, 42);
+    s_fl.heroDist = ui_make_label(s_fl.hero, "--", UI_FONT_MD, UI_COL_GOOD);
+    lv_obj_align(s_fl.heroDist, LV_ALIGN_TOP_LEFT, 0, 42);
 
-    s_heroBody = ui_make_label(s_flightHero, "", UI_FONT_XS, UI_COL_TEXT_SEC);
-    lv_obj_set_style_text_line_space(s_heroBody, 4, 0);
-    lv_obj_set_width(s_heroBody, 88);
-    lv_label_set_long_mode(s_heroBody, LV_LABEL_LONG_WRAP);
-    lv_obj_align(s_heroBody, LV_ALIGN_TOP_LEFT, 0, 68);
+    s_fl.heroBody = ui_make_label(s_fl.hero, "", UI_FONT_XS, UI_COL_TEXT_SEC);
+    lv_obj_set_style_text_line_space(s_fl.heroBody, 4, 0);
+    lv_obj_set_width(s_fl.heroBody, 88);
+    lv_label_set_long_mode(s_fl.heroBody, LV_LABEL_LONG_WRAP);
+    lv_obj_align(s_fl.heroBody, LV_ALIGN_TOP_LEFT, 0, 68);
 
-    lv_obj_add_flag(s_flightHero, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(s_fl.hero, LV_OBJ_FLAG_HIDDEN);
 
     // Table (hidden until toggled).
-    s_flightsTable = lv_table_create(pg);
-    lv_obj_align(s_flightsTable, LV_ALIGN_TOP_LEFT, 0, 32);
-    lv_obj_set_size(s_flightsTable, LV_HOR_RES - SIDEBAR_W - 36, PAGE_H - 72);
-    lv_table_set_col_cnt(s_flightsTable, 6);
-    lv_table_set_row_cnt(s_flightsTable, 1);
-    lv_table_set_cell_value(s_flightsTable, 0, 0, "#");
-    lv_table_set_cell_value(s_flightsTable, 0, 1, "Tail");
-    lv_table_set_cell_value(s_flightsTable, 0, 2, "Type");
-    lv_table_set_cell_value(s_flightsTable, 0, 3, "Alt ft");
-    lv_table_set_cell_value(s_flightsTable, 0, 4, "Dist");
-    lv_table_set_cell_value(s_flightsTable, 0, 5, "Brg");
-    lv_table_set_col_width(s_flightsTable, 0, 44);
-    lv_table_set_col_width(s_flightsTable, 1, 120);
-    lv_table_set_col_width(s_flightsTable, 2, 80);
-    lv_table_set_col_width(s_flightsTable, 3, 100);
-    lv_table_set_col_width(s_flightsTable, 4, 90);
-    lv_table_set_col_width(s_flightsTable, 5, 70);
+    s_fl.table = lv_table_create(pg);
+    lv_obj_align(s_fl.table, LV_ALIGN_TOP_LEFT, 0, 32);
+    lv_obj_set_size(s_fl.table, LV_HOR_RES - SIDEBAR_W - 36, PAGE_H - 72);
+    lv_table_set_col_cnt(s_fl.table, 6);
+    lv_table_set_row_cnt(s_fl.table, 1);
+    lv_table_set_cell_value(s_fl.table, 0, 0, "#");
+    lv_table_set_cell_value(s_fl.table, 0, 1, "Tail");
+    lv_table_set_cell_value(s_fl.table, 0, 2, "Type");
+    lv_table_set_cell_value(s_fl.table, 0, 3, "Alt ft");
+    lv_table_set_cell_value(s_fl.table, 0, 4, "Dist");
+    lv_table_set_cell_value(s_fl.table, 0, 5, "Brg");
+    lv_table_set_col_width(s_fl.table, 0, 44);
+    lv_table_set_col_width(s_fl.table, 1, 120);
+    lv_table_set_col_width(s_fl.table, 2, 80);
+    lv_table_set_col_width(s_fl.table, 3, 100);
+    lv_table_set_col_width(s_fl.table, 4, 90);
+    lv_table_set_col_width(s_fl.table, 5, 70);
 
-    lv_obj_add_flag(s_flightsTable, LV_OBJ_FLAG_HIDDEN);   // map is the default view
+    lv_obj_add_flag(s_fl.table, LV_OBJ_FLAG_HIDDEN);   // map is the default view
     update_radar_range_lbl();
     draw_radar();
 
-    if (!s_radarTimer) s_radarTimer = lv_timer_create(radar_sweep_timer_cb, 70, nullptr);
+    if (!s_fl.radarTimer) s_fl.radarTimer = lv_timer_create(radar_sweep_timer_cb, 70, nullptr);
 }
 
 // ------------------------------------------------------------ tickers page ---
@@ -976,27 +996,27 @@ static const char *TF_LABELS[5] = {"1D", "5D", "1M", "6M", "1Y"};
 #define BAR_Y 46
 #define BAR_W 140
 
-int ui_ticker_tf_index() { return s_tfIndex; }
+int ui_ticker_tf_index() { return s_tk.tfIndex; }
 
 static void tf_restyle() {
     for (int i = 0; i < 5; i++) {
-        if (!s_tfBtn[i]) continue;
-        bool on = (i == s_tfIndex);
-        lv_obj_set_style_bg_color(s_tfBtn[i], lv_color_hex(on ? 0x2d6cdf : 0x1c2740), 0);
+        if (!s_tk.tfBtn[i]) continue;
+        bool on = (i == s_tk.tfIndex);
+        lv_obj_set_style_bg_color(s_tk.tfBtn[i], lv_color_hex(on ? 0x2d6cdf : 0x1c2740), 0);
     }
 }
 
 static void tf_click_cb(lv_event_t *e) {
     int idx = (int)(intptr_t)lv_event_get_user_data(e);
-    if (idx == s_tfIndex) return;
-    s_tfIndex = idx;
+    if (idx == s_tk.tfIndex) return;
+    s_tk.tfIndex = idx;
     settings_set_ticker_tf((uint8_t)idx);   // remember across reboots
     tf_restyle();
     data_request_tickers();          // refetch this timeframe on the next tick
 }
 
 static void draw_sparkline(int i, TickerRow &r) {
-    lv_obj_t *cv = s_tkSpark[i];
+    lv_obj_t *cv = s_tk.spark[i];
     if (!cv) return;
     lv_canvas_fill_bg(cv, lv_color_hex(0x141c2e), LV_OPA_COVER);
     int len = r.sparkLen;
@@ -1039,8 +1059,8 @@ static void draw_sparkline(int i, TickerRow &r) {
 static void build_tickers(lv_obj_t *pg) {
     const int CW = LV_HOR_RES - SIDEBAR_W - 36;
 
-    s_tickersStatus = ui_make_label(pg, "Loading quotes...", UI_FONT_XS, UI_COL_TEXT_MUTE);
-    lv_obj_align(s_tickersStatus, LV_ALIGN_TOP_LEFT, 0, 6);
+    s_tk.status = ui_make_label(pg, "Loading quotes...", UI_FONT_XS, UI_COL_TEXT_MUTE);
+    lv_obj_align(s_tk.status, LV_ALIGN_TOP_LEFT, 0, 6);
 
     // Timeframe selector row (top-right).
     const int bw = 54, bh = 30, bgap = 6;
@@ -1055,75 +1075,75 @@ static void build_tickers(lv_obj_t *pg) {
         lv_obj_add_event_cb(b, tf_click_cb, LV_EVENT_CLICKED, (void *)(intptr_t)i);
         lv_obj_t *l = ui_make_label(b, TF_LABELS[i], UI_FONT_SM, UI_COL_TEXT);
         lv_obj_center(l);
-        s_tfBtn[i] = b;
+        s_tk.tfBtn[i] = b;
     }
-    s_tfIndex = settings().tickerTf;
-    if (s_tfIndex < 0 || s_tfIndex > 4) s_tfIndex = 0;
+    s_tk.tfIndex = settings().tickerTf;
+    if (s_tk.tfIndex < 0 || s_tk.tfIndex > 4) s_tk.tfIndex = 0;
     tf_restyle();
 
     // Scrollable card list.
-    s_tkList = lv_obj_create(pg);
-    lv_obj_set_size(s_tkList, CW, PAGE_H - 44);
-    lv_obj_align(s_tkList, LV_ALIGN_TOP_LEFT, 0, 40);
-    lv_obj_set_style_bg_opa(s_tkList, LV_OPA_TRANSP, 0);
-    lv_obj_set_style_border_width(s_tkList, 0, 0);
-    lv_obj_set_style_pad_all(s_tkList, 0, 0);
-    lv_obj_set_scroll_dir(s_tkList, LV_DIR_VER);
+    s_tk.list = lv_obj_create(pg);
+    lv_obj_set_size(s_tk.list, CW, PAGE_H - 44);
+    lv_obj_align(s_tk.list, LV_ALIGN_TOP_LEFT, 0, 40);
+    lv_obj_set_style_bg_opa(s_tk.list, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(s_tk.list, 0, 0);
+    lv_obj_set_style_pad_all(s_tk.list, 0, 0);
+    lv_obj_set_scroll_dir(s_tk.list, LV_DIR_VER);
 
     static lv_color_t *spBuf[8] = {nullptr};
     const int cardW = CW - 12;       // leave room for the scrollbar
     for (int i = 0; i < 8; i++) {
-        lv_obj_t *c = ui_make_card(s_tkList, cardW, TK_CARD_H, 8, 0);   // pad 0 else theme padding clips the bottom LIVE/CLOSED row
+        lv_obj_t *c = ui_make_card(s_tk.list, cardW, TK_CARD_H, 8, 0);   // pad 0 else theme padding clips the bottom LIVE/CLOSED row
         lv_obj_set_pos(c, 0, i * (TK_CARD_H + 8));
-        s_tkCard[i] = c;
+        s_tk.card[i] = c;
 
-        s_tkSym[i] = ui_make_label(c, "", UI_FONT_XL, UI_COL_WHITE);
-        lv_obj_align(s_tkSym[i], LV_ALIGN_TOP_LEFT, 6, 4);
+        s_tk.sym[i] = ui_make_label(c, "", UI_FONT_XL, UI_COL_WHITE);
+        lv_obj_align(s_tk.sym[i], LV_ALIGN_TOP_LEFT, 6, 4);
 
-        s_tkName[i] = ui_make_label(c, "", UI_FONT_XS, UI_COL_TEXT_MUTE);
-        lv_label_set_long_mode(s_tkName[i], LV_LABEL_LONG_DOT);
-        lv_obj_set_width(s_tkName[i], 150);
-        lv_obj_align(s_tkName[i], LV_ALIGN_TOP_LEFT, 6, 42);
+        s_tk.name[i] = ui_make_label(c, "", UI_FONT_XS, UI_COL_TEXT_MUTE);
+        lv_label_set_long_mode(s_tk.name[i], LV_LABEL_LONG_DOT);
+        lv_obj_set_width(s_tk.name[i], 150);
+        lv_obj_align(s_tk.name[i], LV_ALIGN_TOP_LEFT, 6, 42);
 
-        s_tkState[i] = lv_label_create(c);
-        lv_obj_set_style_text_font(s_tkState[i], &lv_font_montserrat_12, 0);
-        lv_obj_align(s_tkState[i], LV_ALIGN_TOP_LEFT, 6, 64);
+        s_tk.state[i] = lv_label_create(c);
+        lv_obj_set_style_text_font(s_tk.state[i], &lv_font_montserrat_12, 0);
+        lv_obj_align(s_tk.state[i], LV_ALIGN_TOP_LEFT, 6, 64);
 
-        s_tkPrice[i] = ui_make_label(c, "", UI_FONT_XL, UI_COL_TEXT);
-        lv_obj_align(s_tkPrice[i], LV_ALIGN_TOP_LEFT, 172, 8);
+        s_tk.price[i] = ui_make_label(c, "", UI_FONT_XL, UI_COL_TEXT);
+        lv_obj_align(s_tk.price[i], LV_ALIGN_TOP_LEFT, 172, 8);
 
-        s_tkChange[i] = lv_label_create(c);
-        lv_obj_set_style_text_font(s_tkChange[i], &lv_font_montserrat_16, 0);
-        lv_obj_align(s_tkChange[i], LV_ALIGN_TOP_LEFT, 172, 50);
+        s_tk.change[i] = lv_label_create(c);
+        lv_obj_set_style_text_font(s_tk.change[i], &lv_font_montserrat_16, 0);
+        lv_obj_align(s_tk.change[i], LV_ALIGN_TOP_LEFT, 172, 50);
 
         if (!spBuf[i]) spBuf[i] = (lv_color_t *)heap_caps_malloc(
             SP_W * SP_H * sizeof(lv_color_t), MALLOC_CAP_SPIRAM);
-        s_tkSpark[i] = lv_canvas_create(c);
-        lv_canvas_set_buffer(s_tkSpark[i], spBuf[i], SP_W, SP_H, LV_IMG_CF_TRUE_COLOR);
-        lv_obj_align(s_tkSpark[i], LV_ALIGN_TOP_LEFT, 340, 12);
-        lv_canvas_fill_bg(s_tkSpark[i], lv_color_hex(0x141c2e), LV_OPA_COVER);
+        s_tk.spark[i] = lv_canvas_create(c);
+        lv_canvas_set_buffer(s_tk.spark[i], spBuf[i], SP_W, SP_H, LV_IMG_CF_TRUE_COLOR);
+        lv_obj_align(s_tk.spark[i], LV_ALIGN_TOP_LEFT, 340, 12);
+        lv_canvas_fill_bg(s_tk.spark[i], lv_color_hex(0x141c2e), LV_OPA_COVER);
 
-        s_tkBar[i] = lv_obj_create(c);
-        lv_obj_set_size(s_tkBar[i], BAR_W, 6);
-        lv_obj_set_style_bg_color(s_tkBar[i], lv_color_hex(0x2a3550), 0);
-        lv_obj_set_style_border_width(s_tkBar[i], 0, 0);
-        lv_obj_set_style_radius(s_tkBar[i], 3, 0);
-        lv_obj_clear_flag(s_tkBar[i], LV_OBJ_FLAG_SCROLLABLE);
-        lv_obj_align(s_tkBar[i], LV_ALIGN_TOP_LEFT, BAR_X, BAR_Y);
+        s_tk.bar[i] = lv_obj_create(c);
+        lv_obj_set_size(s_tk.bar[i], BAR_W, 6);
+        lv_obj_set_style_bg_color(s_tk.bar[i], lv_color_hex(0x2a3550), 0);
+        lv_obj_set_style_border_width(s_tk.bar[i], 0, 0);
+        lv_obj_set_style_radius(s_tk.bar[i], 3, 0);
+        lv_obj_clear_flag(s_tk.bar[i], LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_align(s_tk.bar[i], LV_ALIGN_TOP_LEFT, BAR_X, BAR_Y);
 
-        s_tkBarDot[i] = lv_obj_create(c);
-        lv_obj_set_size(s_tkBarDot[i], 10, 10);
-        lv_obj_set_style_bg_color(s_tkBarDot[i], lv_color_hex(0xffffff), 0);
-        lv_obj_set_style_border_width(s_tkBarDot[i], 0, 0);
-        lv_obj_set_style_radius(s_tkBarDot[i], LV_RADIUS_CIRCLE, 0);
-        lv_obj_clear_flag(s_tkBarDot[i], LV_OBJ_FLAG_SCROLLABLE);
-        lv_obj_align(s_tkBarDot[i], LV_ALIGN_TOP_LEFT, BAR_X, BAR_Y - 2);
+        s_tk.barDot[i] = lv_obj_create(c);
+        lv_obj_set_size(s_tk.barDot[i], 10, 10);
+        lv_obj_set_style_bg_color(s_tk.barDot[i], lv_color_hex(0xffffff), 0);
+        lv_obj_set_style_border_width(s_tk.barDot[i], 0, 0);
+        lv_obj_set_style_radius(s_tk.barDot[i], LV_RADIUS_CIRCLE, 0);
+        lv_obj_clear_flag(s_tk.barDot[i], LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_align(s_tk.barDot[i], LV_ALIGN_TOP_LEFT, BAR_X, BAR_Y - 2);
 
-        s_tkLo[i] = ui_make_label(c, "", UI_FONT_XS, UI_COL_TEXT_MUTE);
-        lv_obj_align(s_tkLo[i], LV_ALIGN_TOP_LEFT, BAR_X, BAR_Y + 12);
+        s_tk.lo[i] = ui_make_label(c, "", UI_FONT_XS, UI_COL_TEXT_MUTE);
+        lv_obj_align(s_tk.lo[i], LV_ALIGN_TOP_LEFT, BAR_X, BAR_Y + 12);
 
-        s_tkHi[i] = ui_make_label(c, "", UI_FONT_XS, UI_COL_TEXT_MUTE);
-        lv_obj_align(s_tkHi[i], LV_ALIGN_TOP_LEFT, BAR_X, BAR_Y + 26);
+        s_tk.hi[i] = ui_make_label(c, "", UI_FONT_XS, UI_COL_TEXT_MUTE);
+        lv_obj_align(s_tk.hi[i], LV_ALIGN_TOP_LEFT, BAR_X, BAR_Y + 26);
 
         lv_obj_add_flag(c, LV_OBJ_FLAG_HIDDEN);
     }
@@ -1131,29 +1151,29 @@ static void build_tickers(lv_obj_t *pg) {
 
 // -- Config / Info page: shows WHERE the web config lives (never edits on-device) --
 static void build_config(lv_obj_t *pg) {
-    s_cfgState = ui_make_label(pg, "", UI_FONT_LG, UI_COL_ACCENT_CY);
-    lv_obj_align(s_cfgState, LV_ALIGN_TOP_LEFT, 0, 8);
+    s_cfg.state = ui_make_label(pg, "", UI_FONT_LG, UI_COL_ACCENT_CY);
+    lv_obj_align(s_cfg.state, LV_ALIGN_TOP_LEFT, 0, 8);
 
-    s_cfgDetails = ui_make_label(pg, "", UI_FONT_MD, UI_COL_TEXT_SEC);
-    lv_label_set_long_mode(s_cfgDetails, LV_LABEL_LONG_WRAP);
-    lv_obj_set_width(s_cfgDetails, LV_HOR_RES - SIDEBAR_W - 220);
-    lv_obj_align(s_cfgDetails, LV_ALIGN_TOP_LEFT, 0, 44);
+    s_cfg.details = ui_make_label(pg, "", UI_FONT_MD, UI_COL_TEXT_SEC);
+    lv_label_set_long_mode(s_cfg.details, LV_LABEL_LONG_WRAP);
+    lv_obj_set_width(s_cfg.details, LV_HOR_RES - SIDEBAR_W - 220);
+    lv_obj_align(s_cfg.details, LV_ALIGN_TOP_LEFT, 0, 44);
 
     // QR canvas (right side). Sized for a version-3 code scaled x5 + quiet zone.
     static lv_color_t *qrBuf = nullptr;
     const int QR_PX = 210;
     if (!qrBuf) qrBuf = (lv_color_t *)heap_caps_malloc(
         QR_PX * QR_PX * sizeof(lv_color_t), MALLOC_CAP_SPIRAM);
-    s_cfgQr = lv_canvas_create(pg);
-    lv_canvas_set_buffer(s_cfgQr, qrBuf, QR_PX, QR_PX, LV_IMG_CF_TRUE_COLOR);
-    lv_obj_align(s_cfgQr, LV_ALIGN_TOP_RIGHT, 0, 8);
+    s_cfg.qr = lv_canvas_create(pg);
+    lv_canvas_set_buffer(s_cfg.qr, qrBuf, QR_PX, QR_PX, LV_IMG_CF_TRUE_COLOR);
+    lv_obj_align(s_cfg.qr, LV_ALIGN_TOP_RIGHT, 0, 8);
 }
 
 // Render a URL into the config-page QR canvas.
 static void render_qr(const String &text) {
-    if (!s_cfgQr) return;
+    if (!s_cfg.qr) return;
     const int QR_PX = 210;
-    lv_canvas_fill_bg(s_cfgQr, lv_color_white(), LV_OPA_COVER);
+    lv_canvas_fill_bg(s_cfg.qr, lv_color_white(), LV_OPA_COVER);
 
     QRCode qr;
     // qrcode_getBufferSize(4) = ((4*4+17)^2 + 7) / 8 = 137 bytes (runtime fn, not constexpr).
@@ -1173,7 +1193,7 @@ static void render_qr(const String &text) {
             int py = origin + (y + quiet) * scale;
             for (int dy = 0; dy < scale; dy++)
                 for (int dx = 0; dx < scale; dx++)
-                    lv_canvas_set_px_color(s_cfgQr, px + dx, py + dy, lv_color_black());
+                    lv_canvas_set_px_color(s_cfg.qr, px + dx, py + dy, lv_color_black());
         }
     }
 }
@@ -1196,8 +1216,8 @@ static int rssi_to_bars(int rssi, uint32_t *col) {
 static void topbar_relayout() {
     if (!s_topWifi) return;
     lv_obj_align(s_topWifi, LV_ALIGN_RIGHT_MID, -10, 0);
-    lv_obj_align_to(s_clockTime, s_topWifi, LV_ALIGN_OUT_LEFT_MID, -12, 0);
-    lv_obj_align_to(s_clockDate, s_clockTime, LV_ALIGN_OUT_LEFT_MID, -10, 0);
+    lv_obj_align_to(s_home.clockTime, s_topWifi, LV_ALIGN_OUT_LEFT_MID, -12, 0);
+    lv_obj_align_to(s_home.clockDate, s_home.clockTime, LV_ALIGN_OUT_LEFT_MID, -10, 0);
 }
 
 // Light the top-bar Wi-Fi bars per current signal (grey when offline).
@@ -1253,9 +1273,9 @@ static void build_topbar(lv_obj_t *scr) {
 
     // Global clock (right): muted date + bold time, same font so it reads cleanly.
     // Positioned in topbar_relayout() right-to-left so the date never clips.
-    s_clockDate = ui_make_label(s_topbar, "", UI_FONT_LG, UI_COL_TEXT_MUTE);
+    s_home.clockDate = ui_make_label(s_topbar, "", UI_FONT_LG, UI_COL_TEXT_MUTE);
 
-    s_clockTime = ui_make_label(s_topbar, "--:--", UI_FONT_LG, UI_COL_WHITE);
+    s_home.clockTime = ui_make_label(s_topbar, "--:--", UI_FONT_LG, UI_COL_WHITE);
 
     topbar_relayout();
     update_topbar_wifi();
@@ -1336,31 +1356,31 @@ static void build_photo(lv_obj_t *pg) {
 
     photo_init();
 
-    s_photoCanvas = lv_canvas_create(pg);
-    lv_canvas_set_buffer(s_photoCanvas, photo_buffer(),
+    s_photo.canvas = lv_canvas_create(pg);
+    lv_canvas_set_buffer(s_photo.canvas, photo_buffer(),
                          photo_width(), photo_height(), LV_IMG_CF_TRUE_COLOR);
-    lv_obj_align(s_photoCanvas, LV_ALIGN_TOP_LEFT, 0, 0);
+    lv_obj_align(s_photo.canvas, LV_ALIGN_TOP_LEFT, 0, 0);
 
-    s_photoStatus = ui_make_label(pg, "Loading nature photo...", UI_FONT_LG, UI_COL_TEXT);
-    lv_obj_set_style_bg_color(s_photoStatus, lv_color_hex(0x000000), 0);
-    lv_obj_set_style_bg_opa(s_photoStatus, LV_OPA_50, 0);
-    lv_obj_set_style_pad_all(s_photoStatus, 8, 0);
-    lv_obj_set_style_radius(s_photoStatus, 6, 0);
-    lv_obj_align(s_photoStatus, LV_ALIGN_CENTER, 0, 0);
+    s_photo.status = ui_make_label(pg, "Loading nature photo...", UI_FONT_LG, UI_COL_TEXT);
+    lv_obj_set_style_bg_color(s_photo.status, lv_color_hex(0x000000), 0);
+    lv_obj_set_style_bg_opa(s_photo.status, LV_OPA_50, 0);
+    lv_obj_set_style_pad_all(s_photo.status, 8, 0);
+    lv_obj_set_style_radius(s_photo.status, 6, 0);
+    lv_obj_align(s_photo.status, LV_ALIGN_CENTER, 0, 0);
 }
 
 void ui_photo_refresh(bool ok, const char *status) {
     UiLock _lk;
-    if (!s_photoCanvas) return;
+    if (!s_photo.canvas) return;
     s_photoHave = true;
     page_set_loading(PAGE_PHOTO, false);
     if (ok) {
-        if (s_photoStatus) lv_obj_add_flag(s_photoStatus, LV_OBJ_FLAG_HIDDEN);
-        lv_obj_invalidate(s_photoCanvas);
-    } else if (s_photoStatus) {
-        lv_label_set_text(s_photoStatus, status && status[0] ? status : "Photo unavailable");
-        lv_obj_clear_flag(s_photoStatus, LV_OBJ_FLAG_HIDDEN);
-        lv_obj_align(s_photoStatus, LV_ALIGN_CENTER, 0, 0);
+        if (s_photo.status) lv_obj_add_flag(s_photo.status, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_invalidate(s_photo.canvas);
+    } else if (s_photo.status) {
+        lv_label_set_text(s_photo.status, status && status[0] ? status : "Photo unavailable");
+        lv_obj_clear_flag(s_photo.status, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_align(s_photo.status, LV_ALIGN_CENTER, 0, 0);
     }
 }
 
@@ -1378,14 +1398,14 @@ static void cal_fmt_dur(long sec, char *out, size_t n) {
 }
 
 static void cal_close_cb(lv_event_t *e) {
-    if (s_calCard) lv_obj_add_flag(s_calCard, LV_OBJ_FLAG_HIDDEN);
+    if (s_cal.card) lv_obj_add_flag(s_cal.card, LV_OBJ_FLAG_HIDDEN);
 }
 
 // Populate and open the detail popup for cached event index `idx`.
 static void cal_show_detail(int idx) {
-    if (!s_calCard || idx < 0 || idx >= s_calAllCount) return;
-    const CalEvent &e = s_calAll[idx];
-    lv_label_set_text(s_calCardTitle, e.title.length() ? e.title.c_str() : "(no title)");
+    if (!s_cal.card || idx < 0 || idx >= s_cal.allCount) return;
+    const CalEvent &e = s_cal.all[idx];
+    lv_label_set_text(s_cal.cardTitle, e.title.length() ? e.title.c_str() : "(no title)");
 
     time_t st = (time_t)e.start; struct tm t; localtime_r(&st, &t);
     time_t now = time(nullptr);
@@ -1438,17 +1458,17 @@ static void cal_show_detail(int idx) {
     if (e.location.length())
         snprintf(body + p, sizeof(body) - p, LV_SYMBOL_GPS " %s", e.location.c_str());
 
-    lv_label_set_text(s_calCardBody, body);
-    lv_obj_clear_flag(s_calCard, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_move_foreground(s_calCard);
+    lv_label_set_text(s_cal.cardBody, body);
+    lv_obj_clear_flag(s_cal.card, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_move_foreground(s_cal.card);
 }
 
 static void cal_row_cb(lv_event_t *e) {
     int i = (int)(intptr_t)lv_event_get_user_data(e);
-    if (i >= 0 && i < UI_MAX_EVENTS) cal_show_detail(s_calRowMap[i]);
+    if (i >= 0 && i < UI_MAX_EVENTS) cal_show_detail(s_cal.rowMap[i]);
 }
 
-static void cal_hero_cb(lv_event_t *e) { cal_show_detail(s_calHeroIdx); }
+static void cal_hero_cb(lv_event_t *e) { cal_show_detail(s_cal.heroIdx); }
 
 // ---------------------------------------------------------------------------
 // Calendar view engine (List / Day / Week / Month + period navigation)
@@ -1458,9 +1478,9 @@ static const char *CAL_VIEW_LABELS[4] = {"List", "Day", "Week", "Month"};
 
 static void cal_view_restyle() {
     for (int i = 0; i < 4; i++) {
-        if (!s_calViewBtn[i]) continue;
-        bool on = (i == s_calView);
-        lv_obj_set_style_bg_color(s_calViewBtn[i], lv_color_hex(on ? 0x2d6cdf : 0x1c2740), 0);
+        if (!s_cal.viewBtn[i]) continue;
+        bool on = (i == s_cal.view);
+        lv_obj_set_style_bg_color(s_cal.viewBtn[i], lv_color_hex(on ? 0x2d6cdf : 0x1c2740), 0);
     }
 }
 
@@ -1478,9 +1498,9 @@ static void cal_fill_row(int r, const CalEvent &e) {
     else { int h12 = tm.tm_hour % 12; if (!h12) h12 = 12;
         snprintf(when, sizeof(when), "%s %d/%d\n%d:%02d %s", WD[wd], tm.tm_mon + 1, tm.tm_mday,
                  h12, tm.tm_min, tm.tm_hour < 12 ? "AM" : "PM"); }
-    lv_label_set_text(s_calWhen[r], when);
-    lv_label_set_text(s_calTitle[r], e.title.length() ? e.title.c_str() : "(no title)");
-    lv_obj_clear_flag(s_calRow[r], LV_OBJ_FLAG_HIDDEN);
+    lv_label_set_text(s_cal.when[r], when);
+    lv_label_set_text(s_cal.title[r], e.title.length() ? e.title.c_str() : "(no title)");
+    lv_obj_clear_flag(s_cal.row[r], LV_OBJ_FLAG_HIDDEN);
 }
 
 // Advance an instant by whole months, staying mid-month/noon to dodge DST + rollover.
@@ -1495,13 +1515,13 @@ static void cal_period(long &lo, long &hi, char *label, size_t ln) {
     static const char *MON[12] = {"Jan", "Feb", "Mar", "Apr", "May", "Jun",
                                   "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"};
     static const char *WD[7]   = {"Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"};
-    time_t base = (s_calAnchor > 100000) ? (time_t)s_calAnchor : time(nullptr);
+    time_t base = (s_cal.anchor > 100000) ? (time_t)s_cal.anchor : time(nullptr);
     struct tm tm; localtime_r(&base, &tm);
-    if (s_calView == CAL_DAY) {
+    if (s_cal.view == CAL_DAY) {
         struct tm d = tm; d.tm_hour = d.tm_min = d.tm_sec = 0;
         lo = (long)mktime(&d); hi = lo + 86400L;
         snprintf(label, ln, "%s, %s %d", WD[d.tm_wday], MON[d.tm_mon], d.tm_mday);
-    } else if (s_calView == CAL_WEEK) {
+    } else if (s_cal.view == CAL_WEEK) {
         struct tm d = tm; d.tm_hour = d.tm_min = d.tm_sec = 0;
         long day0 = (long)mktime(&d);
         lo = day0 - d.tm_wday * 86400L; hi = lo + 7 * 86400L;
@@ -1519,7 +1539,7 @@ static void cal_period(long &lo, long &hi, char *label, size_t ln) {
 // Paint the 42-cell month grid: day numbers, in/out-of-month shading, today accent,
 // and a per-day event count. Also records each cell's noon epoch for tap-to-Day.
 static void cal_render_month() {
-    time_t base = (s_calAnchor > 100000) ? (time_t)s_calAnchor : time(nullptr);
+    time_t base = (s_cal.anchor > 100000) ? (time_t)s_cal.anchor : time(nullptr);
     struct tm fm; localtime_r(&base, &fm);
     fm.tm_mday = 1; fm.tm_hour = 12; fm.tm_min = fm.tm_sec = 0;
     mktime(&fm);                                     // normalize -> tm_wday of the 1st
@@ -1533,133 +1553,134 @@ static void cal_render_month() {
     for (int i = 0; i < 42; i++) {
         struct tm c = fm; c.tm_mday = 1 - firstWd + i; c.tm_hour = 12; c.tm_min = c.tm_sec = 0;
         time_t ct = mktime(&c);                       // normalizes across month bounds
-        s_calCellEpoch[i] = (long)ct;
+        s_cal.cellEpoch[i] = (long)ct;
         cellSerial[i] = serial(c);
         bool inMonth = (c.tm_mon == thisMon);
         bool today   = (cellSerial[i] == todaySerial);
         char dn[6]; snprintf(dn, sizeof(dn), "%d", c.tm_mday);
-        lv_label_set_text(s_calCellNum[i], dn);
-        lv_obj_set_style_text_color(s_calCellNum[i], lv_color_hex(inMonth ? 0xe6ebf5 : 0x54607a), 0);
-        lv_obj_set_style_bg_color(s_calCell[i],
+        lv_label_set_text(s_cal.cellNum[i], dn);
+        lv_obj_set_style_text_color(s_cal.cellNum[i], lv_color_hex(inMonth ? 0xe6ebf5 : 0x54607a), 0);
+        lv_obj_set_style_bg_color(s_cal.cell[i],
             lv_color_hex(today ? 0x1f3358 : (inMonth ? 0x141c2e : 0x0f1524)), 0);
-        lv_obj_set_style_border_width(s_calCell[i], today ? 2 : 0, 0);
+        lv_obj_set_style_border_width(s_cal.cell[i], today ? 2 : 0, 0);
     }
 
     int cnt[42]; for (int i = 0; i < 42; i++) cnt[i] = 0;
-    for (int i = 0; i < s_calAllCount; i++) {
-        time_t et = (time_t)s_calAll[i].start; struct tm em; localtime_r(&et, &em);
+    for (int i = 0; i < s_cal.allCount; i++) {
+        time_t et = (time_t)s_cal.all[i].start; struct tm em; localtime_r(&et, &em);
         int es = serial(em);
         for (int k = 0; k < 42; k++) if (cellSerial[k] == es) { cnt[k]++; break; }
     }
     for (int k = 0; k < 42; k++) {
         if (cnt[k] > 0) { char b[8]; snprintf(b, sizeof(b), "%d", cnt[k]);
-                          lv_label_set_text(s_calCellCnt[k], b); }
-        else            lv_label_set_text(s_calCellCnt[k], "");
+                          lv_label_set_text(s_cal.cellCnt[k], b); }
+        else            lv_label_set_text(s_cal.cellCnt[k], "");
     }
 }
 
 // Filter the cache into the row pool (List/Day/Week) or the grid (Month), and update
 // the header (status caption for List, period navigator for the dated views).
 static void cal_render() {
-    if (!s_calList) return;
+    if (!s_cal.list) return;
     cal_view_restyle();
 
-    bool isList  = (s_calView == CAL_LIST);
-    bool isMonth = (s_calView == CAL_MONTH);
+    bool isList  = (s_cal.view == CAL_LIST);
+    bool isMonth = (s_cal.view == CAL_MONTH);
 
-    if (s_calStatus) { if (isList) lv_obj_clear_flag(s_calStatus, LV_OBJ_FLAG_HIDDEN);
-                       else        lv_obj_add_flag(s_calStatus, LV_OBJ_FLAG_HIDDEN); }
-    if (s_calNav)    { if (isList) lv_obj_add_flag(s_calNav, LV_OBJ_FLAG_HIDDEN);
-                       else        lv_obj_clear_flag(s_calNav, LV_OBJ_FLAG_HIDDEN); }
-    for (int i = 0; i < 7; i++) if (s_calDow[i]) {
-        if (isMonth) lv_obj_clear_flag(s_calDow[i], LV_OBJ_FLAG_HIDDEN);
-        else         lv_obj_add_flag(s_calDow[i], LV_OBJ_FLAG_HIDDEN); }
-    if (s_calGrid) { if (isMonth) lv_obj_clear_flag(s_calGrid, LV_OBJ_FLAG_HIDDEN);
-                     else         lv_obj_add_flag(s_calGrid, LV_OBJ_FLAG_HIDDEN); }
+    if (s_cal.status) { if (isList) lv_obj_clear_flag(s_cal.status, LV_OBJ_FLAG_HIDDEN);
+                       else        lv_obj_add_flag(s_cal.status, LV_OBJ_FLAG_HIDDEN); }
+    if (s_cal.nav)    { if (isList) lv_obj_add_flag(s_cal.nav, LV_OBJ_FLAG_HIDDEN);
+                       else        lv_obj_clear_flag(s_cal.nav, LV_OBJ_FLAG_HIDDEN); }
+    for (int i = 0; i < 7; i++) if (s_cal.dow[i]) {
+        if (isMonth) lv_obj_clear_flag(s_cal.dow[i], LV_OBJ_FLAG_HIDDEN);
+        else         lv_obj_add_flag(s_cal.dow[i], LV_OBJ_FLAG_HIDDEN); }
+    if (s_cal.grid) { if (isMonth) lv_obj_clear_flag(s_cal.grid, LV_OBJ_FLAG_HIDDEN);
+                     else         lv_obj_add_flag(s_cal.grid, LV_OBJ_FLAG_HIDDEN); }
 
     if (isMonth) {
-        lv_obj_add_flag(s_calList, LV_OBJ_FLAG_HIDDEN);
-        if (s_calHero) lv_obj_add_flag(s_calHero, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_flag(s_cal.list, LV_OBJ_FLAG_HIDDEN);
+        if (s_cal.hero) lv_obj_add_flag(s_cal.hero, LV_OBJ_FLAG_HIDDEN);
         long lo, hi; char hdr[48]; cal_period(lo, hi, hdr, sizeof(hdr));
-        if (s_calPeriodLbl) lv_label_set_text(s_calPeriodLbl, hdr);
+        if (s_cal.periodLbl) lv_label_set_text(s_cal.periodLbl, hdr);
         cal_render_month();
         return;
     }
 
-    lv_obj_clear_flag(s_calList, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_clear_flag(s_cal.list, LV_OBJ_FLAG_HIDDEN);
     if (isList) {
-        lv_obj_set_y(s_calList, 132);
-        lv_obj_set_height(s_calList, PAGE_H - 132 - 8);
+        lv_obj_set_y(s_cal.list, 132);
+        lv_obj_set_height(s_cal.list, PAGE_H - 132 - 8);
     } else {
-        if (s_calHero) lv_obj_add_flag(s_calHero, LV_OBJ_FLAG_HIDDEN);
-        lv_obj_set_y(s_calList, 44);
-        lv_obj_set_height(s_calList, PAGE_H - 44 - 8);
+        if (s_cal.hero) lv_obj_add_flag(s_cal.hero, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_y(s_cal.list, 44);
+        lv_obj_set_height(s_cal.list, PAGE_H - 44 - 8);
     }
 
     long lo = 0, hi = 0; char hdr[48] = "";
     if (!isList) { cal_period(lo, hi, hdr, sizeof(hdr));
-                   if (s_calPeriodLbl) lv_label_set_text(s_calPeriodLbl, hdr); }
+                   if (s_cal.periodLbl) lv_label_set_text(s_cal.periodLbl, hdr); }
 
     int row = 0;
-    for (int i = 0; i < s_calAllCount && row < UI_MAX_EVENTS; i++) {
-        if (!isList) { long s = (long)s_calAll[i].start; if (s < lo || s >= hi) continue; }
-        cal_fill_row(row, s_calAll[i]);
-        s_calRowMap[row] = i;
+    for (int i = 0; i < s_cal.allCount && row < UI_MAX_EVENTS; i++) {
+        if (!isList) { long s = (long)s_cal.all[i].start; if (s < lo || s >= hi) continue; }
+        cal_fill_row(row, s_cal.all[i]);
+        s_cal.rowMap[row] = i;
         row++;
     }
     for (int r = row; r < UI_MAX_EVENTS; r++)
-        if (s_calRow[r]) lv_obj_add_flag(s_calRow[r], LV_OBJ_FLAG_HIDDEN);
+        if (s_cal.row[r]) lv_obj_add_flag(s_cal.row[r], LV_OBJ_FLAG_HIDDEN);
 
     if (isList) {
         char st[48];
-        snprintf(st, sizeof(st), "%d upcoming event%s", s_calAllCount, s_calAllCount == 1 ? "" : "s");
-        if (s_calStatus) lv_label_set_text(s_calStatus, st);
+        snprintf(st, sizeof(st), "%d upcoming event%s", s_cal.allCount, s_cal.allCount == 1 ? "" : "s");
+        if (s_cal.status) lv_label_set_text(s_cal.status, st);
         update_cal_hero();
-    } else if (row == 0 && s_calPeriodLbl) {
+    } else if (row == 0 && s_cal.periodLbl) {
         char e2[64]; snprintf(e2, sizeof(e2), "%s  -  no events", hdr);
-        lv_label_set_text(s_calPeriodLbl, e2);
+        lv_label_set_text(s_cal.periodLbl, e2);
     }
 }
 
 static void cal_view_click_cb(lv_event_t *e) {
     int idx = (int)(intptr_t)lv_event_get_user_data(e);
-    if (idx == s_calView) return;
-    s_calView = idx;
+    if (idx == s_cal.view) return;
+    s_cal.view = idx;
     settings_set_cal_view((uint8_t)idx);    // remember across reboots
-    if (idx != CAL_LIST && s_calAnchor < 100000) s_calAnchor = (long)time(nullptr);
+    if (idx != CAL_LIST && s_cal.anchor < 100000) s_cal.anchor = (long)time(nullptr);
     cal_render();
 }
 
 static void cal_nav_cb(lv_event_t *e) {
     int dir = (int)(intptr_t)lv_event_get_user_data(e);      // -1 prev, +1 next
-    long base = (s_calAnchor > 100000) ? s_calAnchor : (long)time(nullptr);
-    if      (s_calView == CAL_DAY)   base += dir * 86400L;
-    else if (s_calView == CAL_WEEK)  base += dir * 7 * 86400L;
-    else if (s_calView == CAL_MONTH) base = cal_add_months(base, dir);
-    s_calAnchor = base;
+    long base = (s_cal.anchor > 100000) ? s_cal.anchor : (long)time(nullptr);
+    if      (s_cal.view == CAL_DAY)   base += dir * 86400L;
+    else if (s_cal.view == CAL_WEEK)  base += dir * 7 * 86400L;
+    else if (s_cal.view == CAL_MONTH) base = cal_add_months(base, dir);
+    s_cal.anchor = base;
     cal_render();
 }
 
 static void cal_today_cb(lv_event_t *e) {
-    (void)e; s_calAnchor = (long)time(nullptr); cal_render();
+    (void)e; s_cal.anchor = (long)time(nullptr); cal_render();
 }
 
 static void cal_cell_cb(lv_event_t *e) {
     int idx = (int)(intptr_t)lv_event_get_user_data(e);
     if (idx < 0 || idx >= 42) return;
-    s_calAnchor = s_calCellEpoch[idx];
-    s_calView = CAL_DAY;
+    s_cal.anchor = s_cal.cellEpoch[idx];
+    s_cal.view = CAL_DAY;
     cal_render();
 }
 
 static void build_calendar(lv_obj_t *pg) {
     const int CW = LV_HOR_RES - SIDEBAR_W - 36;
 
-    s_calView = settings().calView;                 // restore saved view
-    if (s_calView < CAL_LIST || s_calView > CAL_MONTH) s_calView = CAL_LIST;
+    s_cal.heroIdx = -1;                             // struct zero-init loses the -1 default
+    s_cal.view = settings().calView;                // restore saved view
+    if (s_cal.view < CAL_LIST || s_cal.view > CAL_MONTH) s_cal.view = CAL_LIST;
 
-    s_calStatus = ui_make_label(pg, "Loading calendar...", UI_FONT_XS, UI_COL_TEXT_MUTE);
-    lv_obj_align(s_calStatus, LV_ALIGN_TOP_LEFT, 0, 6);
+    s_cal.status = ui_make_label(pg, "Loading calendar...", UI_FONT_XS, UI_COL_TEXT_MUTE);
+    lv_obj_align(s_cal.status, LV_ALIGN_TOP_LEFT, 0, 6);
 
     // View selector (List / Day / Week / Month), top-right, like the ticker timeframe.
     {
@@ -1675,37 +1696,37 @@ static void build_calendar(lv_obj_t *pg) {
             lv_obj_add_event_cb(b, cal_view_click_cb, LV_EVENT_CLICKED, (void *)(intptr_t)i);
             lv_obj_t *l = ui_make_label(b, CAL_VIEW_LABELS[i], UI_FONT_SM, UI_COL_TEXT);
             lv_obj_center(l);
-            s_calViewBtn[i] = b;
+            s_cal.viewBtn[i] = b;
         }
     }
 
     // Period navigator (prev / caption / next / Today), shown for Day/Week/Month.
-    s_calNav = lv_obj_create(pg);
-    lv_obj_set_size(s_calNav, 372, 30);
-    lv_obj_align(s_calNav, LV_ALIGN_TOP_LEFT, 0, 2);
-    lv_obj_set_style_bg_opa(s_calNav, LV_OPA_TRANSP, 0);
-    lv_obj_set_style_border_width(s_calNav, 0, 0);
-    lv_obj_set_style_pad_all(s_calNav, 0, 0);
-    lv_obj_clear_flag(s_calNav, LV_OBJ_FLAG_SCROLLABLE);
+    s_cal.nav = lv_obj_create(pg);
+    lv_obj_set_size(s_cal.nav, 372, 30);
+    lv_obj_align(s_cal.nav, LV_ALIGN_TOP_LEFT, 0, 2);
+    lv_obj_set_style_bg_opa(s_cal.nav, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(s_cal.nav, 0, 0);
+    lv_obj_set_style_pad_all(s_cal.nav, 0, 0);
+    lv_obj_clear_flag(s_cal.nav, LV_OBJ_FLAG_SCROLLABLE);
     {
-        lv_obj_t *pv = lv_btn_create(s_calNav);
+        lv_obj_t *pv = lv_btn_create(s_cal.nav);
         lv_obj_set_size(pv, 34, 28);
         lv_obj_align(pv, LV_ALIGN_LEFT_MID, 0, 0);
         lv_obj_set_style_bg_color(pv, lv_color_hex(0x1c2740), 0);
         lv_obj_add_event_cb(pv, cal_nav_cb, LV_EVENT_CLICKED, (void *)(intptr_t)(-1));
         lv_obj_t *pl = lv_label_create(pv); lv_label_set_text(pl, LV_SYMBOL_LEFT); lv_obj_center(pl);
 
-        s_calPeriodLbl = ui_make_label(s_calNav, "", UI_FONT_MD, UI_COL_TEXT);
-        lv_obj_align(s_calPeriodLbl, LV_ALIGN_LEFT_MID, 42, 0);
+        s_cal.periodLbl = ui_make_label(s_cal.nav, "", UI_FONT_MD, UI_COL_TEXT);
+        lv_obj_align(s_cal.periodLbl, LV_ALIGN_LEFT_MID, 42, 0);
 
-        lv_obj_t *nx = lv_btn_create(s_calNav);
+        lv_obj_t *nx = lv_btn_create(s_cal.nav);
         lv_obj_set_size(nx, 32, 28);
         lv_obj_align(nx, LV_ALIGN_LEFT_MID, 264, 0);
         lv_obj_set_style_bg_color(nx, lv_color_hex(0x1c2740), 0);
         lv_obj_add_event_cb(nx, cal_nav_cb, LV_EVENT_CLICKED, (void *)(intptr_t)(1));
         lv_obj_t *nl = lv_label_create(nx); lv_label_set_text(nl, LV_SYMBOL_RIGHT); lv_obj_center(nl);
 
-        lv_obj_t *td = lv_btn_create(s_calNav);
+        lv_obj_t *td = lv_btn_create(s_cal.nav);
         lv_obj_set_size(td, 66, 28);
         lv_obj_align(td, LV_ALIGN_LEFT_MID, 302, 0);
         lv_obj_set_style_bg_color(td, lv_color_hex(0x2d6cdf), 0);
@@ -1713,70 +1734,70 @@ static void build_calendar(lv_obj_t *pg) {
         lv_obj_t *tl = lv_label_create(td); lv_label_set_text(tl, "Today");
         lv_obj_set_style_text_font(tl, &lv_font_montserrat_14, 0); lv_obj_center(tl);
     }
-    lv_obj_add_flag(s_calNav, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(s_cal.nav, LV_OBJ_FLAG_HIDDEN);
 
     const int rowW = CW - 12;
 
     // "Up next" hero: the next event with a live countdown, above the scroll list.
     const int heroH = 84;
-    s_calHero = lv_obj_create(pg);
-    lv_obj_set_size(s_calHero, rowW, heroH);
-    lv_obj_align(s_calHero, LV_ALIGN_TOP_LEFT, 0, 40);
-    lv_obj_set_style_bg_color(s_calHero, lv_color_hex(0x18294a), 0);
-    lv_obj_set_style_border_width(s_calHero, 4, 0);
-    lv_obj_set_style_border_side(s_calHero, LV_BORDER_SIDE_LEFT, 0);
-    lv_obj_set_style_border_color(s_calHero, lv_color_hex(UI_COL_ACCENT), 0);
-    lv_obj_set_style_radius(s_calHero, 10, 0);
-    lv_obj_set_style_pad_all(s_calHero, 0, 0);
-    lv_obj_clear_flag(s_calHero, LV_OBJ_FLAG_SCROLLABLE);
+    s_cal.hero = lv_obj_create(pg);
+    lv_obj_set_size(s_cal.hero, rowW, heroH);
+    lv_obj_align(s_cal.hero, LV_ALIGN_TOP_LEFT, 0, 40);
+    lv_obj_set_style_bg_color(s_cal.hero, lv_color_hex(0x18294a), 0);
+    lv_obj_set_style_border_width(s_cal.hero, 4, 0);
+    lv_obj_set_style_border_side(s_cal.hero, LV_BORDER_SIDE_LEFT, 0);
+    lv_obj_set_style_border_color(s_cal.hero, lv_color_hex(UI_COL_ACCENT), 0);
+    lv_obj_set_style_radius(s_cal.hero, 10, 0);
+    lv_obj_set_style_pad_all(s_cal.hero, 0, 0);
+    lv_obj_clear_flag(s_cal.hero, LV_OBJ_FLAG_SCROLLABLE);
 
-    s_calHeroTag = ui_make_label(s_calHero, "UP NEXT", UI_FONT_XS, UI_COL_WHITE);
-    lv_obj_set_style_bg_color(s_calHeroTag, lv_color_hex(UI_COL_ACCENT), 0);
-    lv_obj_set_style_bg_opa(s_calHeroTag, LV_OPA_COVER, 0);
-    lv_obj_set_style_pad_hor(s_calHeroTag, 8, 0);
-    lv_obj_set_style_pad_ver(s_calHeroTag, 2, 0);
-    lv_obj_set_style_radius(s_calHeroTag, 6, 0);
-    lv_obj_align(s_calHeroTag, LV_ALIGN_TOP_LEFT, 14, 10);
+    s_cal.heroTag = ui_make_label(s_cal.hero, "UP NEXT", UI_FONT_XS, UI_COL_WHITE);
+    lv_obj_set_style_bg_color(s_cal.heroTag, lv_color_hex(UI_COL_ACCENT), 0);
+    lv_obj_set_style_bg_opa(s_cal.heroTag, LV_OPA_COVER, 0);
+    lv_obj_set_style_pad_hor(s_cal.heroTag, 8, 0);
+    lv_obj_set_style_pad_ver(s_cal.heroTag, 2, 0);
+    lv_obj_set_style_radius(s_cal.heroTag, 6, 0);
+    lv_obj_align(s_cal.heroTag, LV_ALIGN_TOP_LEFT, 14, 10);
 
-    s_calHeroTitle = ui_make_label(s_calHero, "", UI_FONT_LG, UI_COL_WHITE);
-    lv_label_set_long_mode(s_calHeroTitle, LV_LABEL_LONG_DOT);
-    lv_obj_set_width(s_calHeroTitle, rowW - 28);
-    lv_obj_align(s_calHeroTitle, LV_ALIGN_TOP_LEFT, 14, 34);
+    s_cal.heroTitle = ui_make_label(s_cal.hero, "", UI_FONT_LG, UI_COL_WHITE);
+    lv_label_set_long_mode(s_cal.heroTitle, LV_LABEL_LONG_DOT);
+    lv_obj_set_width(s_cal.heroTitle, rowW - 28);
+    lv_obj_align(s_cal.heroTitle, LV_ALIGN_TOP_LEFT, 14, 34);
 
-    s_calHeroWhen = ui_make_label(s_calHero, "", UI_FONT_MD, 0x9fd0ff);
-    lv_obj_align(s_calHeroWhen, LV_ALIGN_TOP_LEFT, 14, 60);
+    s_cal.heroWhen = ui_make_label(s_cal.hero, "", UI_FONT_MD, 0x9fd0ff);
+    lv_obj_align(s_cal.heroWhen, LV_ALIGN_TOP_LEFT, 14, 60);
 
-    lv_obj_add_flag(s_calHero, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_add_event_cb(s_calHero, cal_hero_cb, LV_EVENT_CLICKED, nullptr);
-    lv_obj_add_flag(s_calHero, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(s_cal.hero, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(s_cal.hero, cal_hero_cb, LV_EVENT_CLICKED, nullptr);
+    lv_obj_add_flag(s_cal.hero, LV_OBJ_FLAG_HIDDEN);
 
     const int listY = 40 + heroH + 8;
-    s_calList = lv_obj_create(pg);
-    lv_obj_set_size(s_calList, CW, PAGE_H - listY - 8);
-    lv_obj_align(s_calList, LV_ALIGN_TOP_LEFT, 0, listY);
-    lv_obj_set_style_bg_opa(s_calList, LV_OPA_TRANSP, 0);
-    lv_obj_set_style_border_width(s_calList, 0, 0);
-    lv_obj_set_style_pad_all(s_calList, 0, 0);
-    lv_obj_set_scroll_dir(s_calList, LV_DIR_VER);
+    s_cal.list = lv_obj_create(pg);
+    lv_obj_set_size(s_cal.list, CW, PAGE_H - listY - 8);
+    lv_obj_align(s_cal.list, LV_ALIGN_TOP_LEFT, 0, listY);
+    lv_obj_set_style_bg_opa(s_cal.list, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(s_cal.list, 0, 0);
+    lv_obj_set_style_pad_all(s_cal.list, 0, 0);
+    lv_obj_set_scroll_dir(s_cal.list, LV_DIR_VER);
 
     const int rowH = 46, gap = 6;
     for (int i = 0; i < UI_MAX_EVENTS; i++) {
-        lv_obj_t *r = lv_obj_create(s_calList);
+        lv_obj_t *r = lv_obj_create(s_cal.list);
         lv_obj_set_size(r, rowW, rowH);
         lv_obj_set_pos(r, 0, i * (rowH + gap));
         lv_obj_set_style_bg_color(r, lv_color_hex(UI_COL_CARD_BG), 0);
         lv_obj_set_style_border_width(r, 0, 0);
         lv_obj_set_style_radius(r, 8, 0);
         lv_obj_clear_flag(r, LV_OBJ_FLAG_SCROLLABLE);
-        s_calRow[i] = r;
+        s_cal.row[i] = r;
 
-        s_calWhen[i] = ui_make_label(r, "", UI_FONT_SM, UI_COL_ACCENT_CY);
-        lv_obj_align(s_calWhen[i], LV_ALIGN_LEFT_MID, 6, 0);
+        s_cal.when[i] = ui_make_label(r, "", UI_FONT_SM, UI_COL_ACCENT_CY);
+        lv_obj_align(s_cal.when[i], LV_ALIGN_LEFT_MID, 6, 0);
 
-        s_calTitle[i] = ui_make_label(r, "", UI_FONT_MD, UI_COL_TEXT);
-        lv_label_set_long_mode(s_calTitle[i], LV_LABEL_LONG_DOT);
-        lv_obj_set_width(s_calTitle[i], rowW - 160);
-        lv_obj_align(s_calTitle[i], LV_ALIGN_LEFT_MID, 140, 0);
+        s_cal.title[i] = ui_make_label(r, "", UI_FONT_MD, UI_COL_TEXT);
+        lv_label_set_long_mode(s_cal.title[i], LV_LABEL_LONG_DOT);
+        lv_obj_set_width(s_cal.title[i], rowW - 160);
+        lv_obj_align(s_cal.title[i], LV_ALIGN_LEFT_MID, 140, 0);
 
         lv_obj_add_flag(r, LV_OBJ_FLAG_CLICKABLE);
         lv_obj_add_event_cb(r, cal_row_cb, LV_EVENT_CLICKED, (void *)(intptr_t)i);
@@ -1795,18 +1816,18 @@ static void build_calendar(lv_obj_t *pg) {
             lv_obj_set_style_text_align(d, LV_TEXT_ALIGN_CENTER, 0);
             lv_obj_align(d, LV_ALIGN_TOP_LEFT, c * cellW, 44);
             lv_obj_add_flag(d, LV_OBJ_FLAG_HIDDEN);
-            s_calDow[c] = d;
+            s_cal.dow[c] = d;
         }
-        s_calGrid = lv_obj_create(pg);
-        lv_obj_set_size(s_calGrid, CW, PAGE_H - gridY - 6);
-        lv_obj_align(s_calGrid, LV_ALIGN_TOP_LEFT, 0, gridY);
-        lv_obj_set_style_bg_opa(s_calGrid, LV_OPA_TRANSP, 0);
-        lv_obj_set_style_border_width(s_calGrid, 0, 0);
-        lv_obj_set_style_pad_all(s_calGrid, 0, 0);
-        lv_obj_clear_flag(s_calGrid, LV_OBJ_FLAG_SCROLLABLE);
+        s_cal.grid = lv_obj_create(pg);
+        lv_obj_set_size(s_cal.grid, CW, PAGE_H - gridY - 6);
+        lv_obj_align(s_cal.grid, LV_ALIGN_TOP_LEFT, 0, gridY);
+        lv_obj_set_style_bg_opa(s_cal.grid, LV_OPA_TRANSP, 0);
+        lv_obj_set_style_border_width(s_cal.grid, 0, 0);
+        lv_obj_set_style_pad_all(s_cal.grid, 0, 0);
+        lv_obj_clear_flag(s_cal.grid, LV_OBJ_FLAG_SCROLLABLE);
         for (int i = 0; i < 42; i++) {
             int rr = i / 7, cc = i % 7;
-            lv_obj_t *cell = lv_obj_create(s_calGrid);
+            lv_obj_t *cell = lv_obj_create(s_cal.grid);
             lv_obj_set_size(cell, cellW - 4, cellH - 4);
             lv_obj_set_pos(cell, cc * cellW, rr * cellH);
             lv_obj_set_style_bg_color(cell, lv_color_hex(UI_COL_CARD_BG), 0);
@@ -1817,42 +1838,42 @@ static void build_calendar(lv_obj_t *pg) {
             lv_obj_clear_flag(cell, LV_OBJ_FLAG_SCROLLABLE);
             lv_obj_add_flag(cell, LV_OBJ_FLAG_CLICKABLE);
             lv_obj_add_event_cb(cell, cal_cell_cb, LV_EVENT_CLICKED, (void *)(intptr_t)i);
-            s_calCell[i] = cell;
+            s_cal.cell[i] = cell;
 
             lv_obj_t *num = ui_make_label(cell, "", UI_FONT_SM, UI_COL_TEXT);
             lv_obj_align(num, LV_ALIGN_TOP_LEFT, 5, 3);
-            s_calCellNum[i] = num;
+            s_cal.cellNum[i] = num;
 
             lv_obj_t *cnt = ui_make_label(cell, "", UI_FONT_SM, UI_COL_ACCENT_CY);
             lv_obj_align(cnt, LV_ALIGN_BOTTOM_RIGHT, -5, -3);
-            s_calCellCnt[i] = cnt;
+            s_cal.cellCnt[i] = cnt;
         }
-        lv_obj_add_flag(s_calGrid, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_flag(s_cal.grid, LV_OBJ_FLAG_HIDDEN);
     }
 
     // Event detail popup (hidden until a row or the hero is tapped).
-    s_calCard = lv_obj_create(pg);
-    lv_obj_set_size(s_calCard, 400, 220);
-    lv_obj_align(s_calCard, LV_ALIGN_CENTER, 0, -6);
-    lv_obj_set_style_bg_color(s_calCard, lv_color_hex(UI_COL_CARD_BG), 0);
-    lv_obj_set_style_border_color(s_calCard, lv_color_hex(UI_COL_ACCENT), 0);
-    lv_obj_set_style_border_width(s_calCard, 2, 0);
-    lv_obj_set_style_radius(s_calCard, 12, 0);
-    lv_obj_set_style_pad_all(s_calCard, 16, 0);
-    lv_obj_clear_flag(s_calCard, LV_OBJ_FLAG_SCROLLABLE);
+    s_cal.card = lv_obj_create(pg);
+    lv_obj_set_size(s_cal.card, 400, 220);
+    lv_obj_align(s_cal.card, LV_ALIGN_CENTER, 0, -6);
+    lv_obj_set_style_bg_color(s_cal.card, lv_color_hex(UI_COL_CARD_BG), 0);
+    lv_obj_set_style_border_color(s_cal.card, lv_color_hex(UI_COL_ACCENT), 0);
+    lv_obj_set_style_border_width(s_cal.card, 2, 0);
+    lv_obj_set_style_radius(s_cal.card, 12, 0);
+    lv_obj_set_style_pad_all(s_cal.card, 16, 0);
+    lv_obj_clear_flag(s_cal.card, LV_OBJ_FLAG_SCROLLABLE);
 
-    s_calCardTitle = ui_make_label(s_calCard, "", UI_FONT_LG, UI_COL_WHITE);
-    lv_label_set_long_mode(s_calCardTitle, LV_LABEL_LONG_WRAP);
-    lv_obj_set_width(s_calCardTitle, 330);
-    lv_obj_align(s_calCardTitle, LV_ALIGN_TOP_LEFT, 0, 0);
+    s_cal.cardTitle = ui_make_label(s_cal.card, "", UI_FONT_LG, UI_COL_WHITE);
+    lv_label_set_long_mode(s_cal.cardTitle, LV_LABEL_LONG_WRAP);
+    lv_obj_set_width(s_cal.cardTitle, 330);
+    lv_obj_align(s_cal.cardTitle, LV_ALIGN_TOP_LEFT, 0, 0);
 
-    s_calCardBody = ui_make_label(s_calCard, "", UI_FONT_MD, UI_COL_TEXT_SEC);
-    lv_obj_set_style_text_line_space(s_calCardBody, 4, 0);
-    lv_label_set_long_mode(s_calCardBody, LV_LABEL_LONG_WRAP);
-    lv_obj_set_width(s_calCardBody, 366);
-    lv_obj_align(s_calCardBody, LV_ALIGN_TOP_LEFT, 0, 54);
+    s_cal.cardBody = ui_make_label(s_cal.card, "", UI_FONT_MD, UI_COL_TEXT_SEC);
+    lv_obj_set_style_text_line_space(s_cal.cardBody, 4, 0);
+    lv_label_set_long_mode(s_cal.cardBody, LV_LABEL_LONG_WRAP);
+    lv_obj_set_width(s_cal.cardBody, 366);
+    lv_obj_align(s_cal.cardBody, LV_ALIGN_TOP_LEFT, 0, 54);
 
-    lv_obj_t *cx = lv_btn_create(s_calCard);
+    lv_obj_t *cx = lv_btn_create(s_cal.card);
     lv_obj_set_size(cx, 26, 26);
     lv_obj_align(cx, LV_ALIGN_TOP_RIGHT, 4, -4);
     lv_obj_set_style_bg_color(cx, lv_color_hex(0x2f80ed), 0);
@@ -1861,7 +1882,7 @@ static void build_calendar(lv_obj_t *pg) {
     lv_label_set_text(cxL, LV_SYMBOL_CLOSE);
     lv_obj_center(cxL);
 
-    lv_obj_add_flag(s_calCard, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(s_cal.card, LV_OBJ_FLAG_HIDDEN);
 
     cal_render();                                   // apply the restored view + layout
 }
@@ -1906,35 +1927,35 @@ static lv_obj_t *make_ring(lv_obj_t *parent, int size, int arcW, int maxVal) {
 static void build_air(lv_obj_t *pg) {
     const int CW = LV_HOR_RES - SIDEBAR_W - 36;
 
-    s_airStatus = ui_make_label(pg, "Loading air quality...", UI_FONT_XS, UI_COL_TEXT_MUTE);
-    lv_obj_align(s_airStatus, LV_ALIGN_TOP_LEFT, 0, 2);
+    s_air.status = ui_make_label(pg, "Loading air quality...", UI_FONT_XS, UI_COL_TEXT_MUTE);
+    lv_obj_align(s_air.status, LV_ALIGN_TOP_LEFT, 0, 2);
 
     // US AQI ring gauge (left). Matches the UV dial: same diameter, font, top edge.
-    s_airAqiArc = make_ring(pg, 160, 15, 300);
-    lv_obj_align(s_airAqiArc, LV_ALIGN_TOP_LEFT, 4, 14);
+    s_air.aqiArc = make_ring(pg, 160, 15, 300);
+    lv_obj_align(s_air.aqiArc, LV_ALIGN_TOP_LEFT, 4, 14);
 
-    s_airAqi = ui_make_label(s_airAqiArc, "--", UI_FONT_XL, UI_COL_TEXT);
-    lv_obj_align(s_airAqi, LV_ALIGN_CENTER, 0, -6);
+    s_air.aqi = ui_make_label(s_air.aqiArc, "--", UI_FONT_XL, UI_COL_TEXT);
+    lv_obj_align(s_air.aqi, LV_ALIGN_CENTER, 0, -6);
 
-    lv_obj_t *aqiUnit = ui_make_label(s_airAqiArc, "US AQI", UI_FONT_XS, UI_COL_TEXT_MUTE);
+    lv_obj_t *aqiUnit = ui_make_label(s_air.aqiArc, "US AQI", UI_FONT_XS, UI_COL_TEXT_MUTE);
     lv_obj_align(aqiUnit, LV_ALIGN_CENTER, 0, 22);
 
-    s_airCat = ui_make_label(pg, "", UI_FONT_MD, UI_COL_TEXT);
-    lv_obj_set_width(s_airCat, 168);
-    lv_obj_set_style_text_align(s_airCat, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_align(s_airCat, LV_ALIGN_TOP_LEFT, 6, 198);
+    s_air.cat = ui_make_label(pg, "", UI_FONT_MD, UI_COL_TEXT);
+    lv_obj_set_width(s_air.cat, 168);
+    lv_obj_set_style_text_align(s_air.cat, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_align(s_air.cat, LV_ALIGN_TOP_LEFT, 6, 198);
 
     // UV index ring gauge (right). Matches the AQI dial: same diameter, font, top edge.
-    s_airUvArc = make_ring(pg, 160, 15, 12);
-    lv_obj_align(s_airUvArc, LV_ALIGN_TOP_RIGHT, -8, 14);
+    s_air.uvArc = make_ring(pg, 160, 15, 12);
+    lv_obj_align(s_air.uvArc, LV_ALIGN_TOP_RIGHT, -8, 14);
 
-    s_airUv = ui_make_label(s_airUvArc, "--", UI_FONT_XL, UI_COL_TEXT);
-    lv_obj_align(s_airUv, LV_ALIGN_CENTER, 0, -6);
+    s_air.uv = ui_make_label(s_air.uvArc, "--", UI_FONT_XL, UI_COL_TEXT);
+    lv_obj_align(s_air.uv, LV_ALIGN_CENTER, 0, -6);
 
-    lv_obj_t *uvName = ui_make_label(s_airUvArc, "UV", UI_FONT_XS, UI_COL_TEXT_MUTE);
+    lv_obj_t *uvName = ui_make_label(s_air.uvArc, "UV", UI_FONT_XS, UI_COL_TEXT_MUTE);
     lv_obj_align(uvName, LV_ALIGN_CENTER, 0, 22);
 
-    lv_obj_t **slots[4] = { &s_airPm25, &s_airPm10, &s_airO3, &s_airNo2 };
+    lv_obj_t **slots[4] = { &s_air.pm25, &s_air.pm10, &s_air.o3, &s_air.no2 };
     const char *names[4] = { "PM2.5", "PM10", "Ozone", "NO2" };
     const int rowH = 38, gap = 6, y0 = 224, rowW = CW - 12;
     for (int i = 0; i < 4; i++) {
@@ -2008,21 +2029,21 @@ static void diag_sample() {
     if (lastMs && nowMs > lastMs) fps = (frames - lastFrames) * 1000.0f / (nowMs - lastMs);
     lastFrames = frames; lastMs = nowMs;
 
-    if (s_diagCount < DIAG_N) {
-        s_heapHist[s_diagCount] = heapKb;
-        s_rssiHist[s_diagCount] = rssi;
-        s_tempHist[s_diagCount] = tempF;
-        s_fpsHist[s_diagCount]  = fps;
-        s_diagCount++;
+    if (s_diag.count < DIAG_N) {
+        s_diag.heapHist[s_diag.count] = heapKb;
+        s_diag.rssiHist[s_diag.count] = rssi;
+        s_diag.tempHist[s_diag.count] = tempF;
+        s_diag.fpsHist[s_diag.count]  = fps;
+        s_diag.count++;
     } else {
-        memmove(s_heapHist, s_heapHist + 1, (DIAG_N - 1) * sizeof(float));
-        memmove(s_rssiHist, s_rssiHist + 1, (DIAG_N - 1) * sizeof(float));
-        memmove(s_tempHist, s_tempHist + 1, (DIAG_N - 1) * sizeof(float));
-        memmove(s_fpsHist,  s_fpsHist + 1,  (DIAG_N - 1) * sizeof(float));
-        s_heapHist[DIAG_N - 1] = heapKb;
-        s_rssiHist[DIAG_N - 1] = rssi;
-        s_tempHist[DIAG_N - 1] = tempF;
-        s_fpsHist[DIAG_N - 1]  = fps;
+        memmove(s_diag.heapHist, s_diag.heapHist + 1, (DIAG_N - 1) * sizeof(float));
+        memmove(s_diag.rssiHist, s_diag.rssiHist + 1, (DIAG_N - 1) * sizeof(float));
+        memmove(s_diag.tempHist, s_diag.tempHist + 1, (DIAG_N - 1) * sizeof(float));
+        memmove(s_diag.fpsHist,  s_diag.fpsHist + 1,  (DIAG_N - 1) * sizeof(float));
+        s_diag.heapHist[DIAG_N - 1] = heapKb;
+        s_diag.rssiHist[DIAG_N - 1] = rssi;
+        s_diag.tempHist[DIAG_N - 1] = tempF;
+        s_diag.fpsHist[DIAG_N - 1]  = fps;
     }
 }
 
@@ -2064,35 +2085,35 @@ static void build_diag(lv_obj_t *pg) {
     // ---- Left column: device text stats + board-only trend charts. ----
     const int LX = 0, LSW = 340, LSH = 56;
 
-    s_diagLbl = ui_make_label(pg, "Collecting device stats...", UI_FONT_SM, UI_COL_TEXT_SEC);
-    lv_obj_set_style_text_line_space(s_diagLbl, 4, 0);
-    lv_obj_align(s_diagLbl, LV_ALIGN_TOP_LEFT, LX, 34);
+    s_diag.lbl = ui_make_label(pg, "Collecting device stats...", UI_FONT_SM, UI_COL_TEXT_SEC);
+    lv_obj_set_style_text_line_space(s_diag.lbl, 4, 0);
+    lv_obj_align(s_diag.lbl, LV_ALIGN_TOP_LEFT, LX, 34);
 
     // ESP32-S3 on-die temperature sensor trend (canvas bufs live in PSRAM).
     static lv_color_t *tBuf = nullptr, *fBuf = nullptr;
 
     lv_obj_t *tt = ui_make_label(pg, "Die temp (F)", UI_FONT_SM, UI_COL_TEXT_MUTE);
     lv_obj_align(tt, LV_ALIGN_TOP_LEFT, LX, 206);
-    s_diagTempVal = ui_make_label(pg, "--", UI_FONT_MD, UI_COL_WARN);
-    lv_obj_align(s_diagTempVal, LV_ALIGN_TOP_LEFT, LX + LSW - 56, 204);
+    s_diag.tempVal = ui_make_label(pg, "--", UI_FONT_MD, UI_COL_WARN);
+    lv_obj_align(s_diag.tempVal, LV_ALIGN_TOP_LEFT, LX + LSW - 56, 204);
     if (!tBuf) tBuf = (lv_color_t *)heap_caps_malloc(
         LSW * LSH * sizeof(lv_color_t), MALLOC_CAP_SPIRAM);
-    s_diagTempSpark = lv_canvas_create(pg);
-    lv_canvas_set_buffer(s_diagTempSpark, tBuf, LSW, LSH, LV_IMG_CF_TRUE_COLOR);
-    lv_obj_align(s_diagTempSpark, LV_ALIGN_TOP_LEFT, LX, 228);
-    lv_canvas_fill_bg(s_diagTempSpark, lv_color_hex(0x141c2e), LV_OPA_COVER);
+    s_diag.tempSpark = lv_canvas_create(pg);
+    lv_canvas_set_buffer(s_diag.tempSpark, tBuf, LSW, LSH, LV_IMG_CF_TRUE_COLOR);
+    lv_obj_align(s_diag.tempSpark, LV_ALIGN_TOP_LEFT, LX, 228);
+    lv_canvas_fill_bg(s_diag.tempSpark, lv_color_hex(0x141c2e), LV_OPA_COVER);
 
     // Measured render FPS trend.
     lv_obj_t *ft = ui_make_label(pg, "Render (FPS)", UI_FONT_SM, UI_COL_TEXT_MUTE);
     lv_obj_align(ft, LV_ALIGN_TOP_LEFT, LX, 296);
-    s_diagFpsVal = ui_make_label(pg, "--", UI_FONT_MD, 0xa78bfa);
-    lv_obj_align(s_diagFpsVal, LV_ALIGN_TOP_LEFT, LX + LSW - 56, 294);
+    s_diag.fpsVal = ui_make_label(pg, "--", UI_FONT_MD, 0xa78bfa);
+    lv_obj_align(s_diag.fpsVal, LV_ALIGN_TOP_LEFT, LX + LSW - 56, 294);
     if (!fBuf) fBuf = (lv_color_t *)heap_caps_malloc(
         LSW * LSH * sizeof(lv_color_t), MALLOC_CAP_SPIRAM);
-    s_diagFpsSpark = lv_canvas_create(pg);
-    lv_canvas_set_buffer(s_diagFpsSpark, fBuf, LSW, LSH, LV_IMG_CF_TRUE_COLOR);
-    lv_obj_align(s_diagFpsSpark, LV_ALIGN_TOP_LEFT, LX, 318);
-    lv_canvas_fill_bg(s_diagFpsSpark, lv_color_hex(0x141c2e), LV_OPA_COVER);
+    s_diag.fpsSpark = lv_canvas_create(pg);
+    lv_canvas_set_buffer(s_diag.fpsSpark, fBuf, LSW, LSH, LV_IMG_CF_TRUE_COLOR);
+    lv_obj_align(s_diag.fpsSpark, LV_ALIGN_TOP_LEFT, LX, 318);
+    lv_canvas_fill_bg(s_diag.fpsSpark, lv_color_hex(0x141c2e), LV_OPA_COVER);
 
     // ---- Right column: live heap + RSSI trends, resource bars, signal. ----
     static lv_color_t *heapBuf = nullptr, *rssiBuf = nullptr;
@@ -2100,30 +2121,30 @@ static void build_diag(lv_obj_t *pg) {
 
     lv_obj_t *ht = ui_make_label(pg, "Free heap (KB)", UI_FONT_SM, UI_COL_TEXT_MUTE);
     lv_obj_align(ht, LV_ALIGN_TOP_LEFT, RX, 34);
-    s_diagHeapVal = ui_make_label(pg, "--", UI_FONT_MD, UI_COL_GOOD);
-    lv_obj_align(s_diagHeapVal, LV_ALIGN_TOP_LEFT, RX + DSP_W - 70, 32);
+    s_diag.heapVal = ui_make_label(pg, "--", UI_FONT_MD, UI_COL_GOOD);
+    lv_obj_align(s_diag.heapVal, LV_ALIGN_TOP_LEFT, RX + DSP_W - 70, 32);
     if (!heapBuf) heapBuf = (lv_color_t *)heap_caps_malloc(
         DSP_W * DSP_H * sizeof(lv_color_t), MALLOC_CAP_SPIRAM);
-    s_diagHeapSpark = lv_canvas_create(pg);
-    lv_canvas_set_buffer(s_diagHeapSpark, heapBuf, DSP_W, DSP_H, LV_IMG_CF_TRUE_COLOR);
-    lv_obj_align(s_diagHeapSpark, LV_ALIGN_TOP_LEFT, RX, 58);
-    lv_canvas_fill_bg(s_diagHeapSpark, lv_color_hex(0x141c2e), LV_OPA_COVER);
+    s_diag.heapSpark = lv_canvas_create(pg);
+    lv_canvas_set_buffer(s_diag.heapSpark, heapBuf, DSP_W, DSP_H, LV_IMG_CF_TRUE_COLOR);
+    lv_obj_align(s_diag.heapSpark, LV_ALIGN_TOP_LEFT, RX, 58);
+    lv_canvas_fill_bg(s_diag.heapSpark, lv_color_hex(0x141c2e), LV_OPA_COVER);
 
     lv_obj_t *rt = ui_make_label(pg, "Wi-Fi RSSI (dBm)", UI_FONT_SM, UI_COL_TEXT_MUTE);
     lv_obj_align(rt, LV_ALIGN_TOP_LEFT, RX, 128);
-    s_diagRssiVal = ui_make_label(pg, "--", UI_FONT_MD, 0x5aa9ff);
-    lv_obj_align(s_diagRssiVal, LV_ALIGN_TOP_LEFT, RX + DSP_W - 90, 126);
+    s_diag.rssiVal = ui_make_label(pg, "--", UI_FONT_MD, 0x5aa9ff);
+    lv_obj_align(s_diag.rssiVal, LV_ALIGN_TOP_LEFT, RX + DSP_W - 90, 126);
     if (!rssiBuf) rssiBuf = (lv_color_t *)heap_caps_malloc(
         DSP_W * DSP_H * sizeof(lv_color_t), MALLOC_CAP_SPIRAM);
-    s_diagRssiSpark = lv_canvas_create(pg);
-    lv_canvas_set_buffer(s_diagRssiSpark, rssiBuf, DSP_W, DSP_H, LV_IMG_CF_TRUE_COLOR);
-    lv_obj_align(s_diagRssiSpark, LV_ALIGN_TOP_LEFT, RX, 152);
-    lv_canvas_fill_bg(s_diagRssiSpark, lv_color_hex(0x141c2e), LV_OPA_COVER);
+    s_diag.rssiSpark = lv_canvas_create(pg);
+    lv_canvas_set_buffer(s_diag.rssiSpark, rssiBuf, DSP_W, DSP_H, LV_IMG_CF_TRUE_COLOR);
+    lv_obj_align(s_diag.rssiSpark, LV_ALIGN_TOP_LEFT, RX, 152);
+    lv_canvas_fill_bg(s_diag.rssiSpark, lv_color_hex(0x141c2e), LV_OPA_COVER);
 
     // Resource usage bars (internal RAM, PSRAM, flash) under the sparklines.
-    s_diagRamBar   = make_stat_bar(pg, "RAM",   RX, 228, &s_diagRamVal);
-    s_diagPsramBar = make_stat_bar(pg, "PSRAM", RX, 262, &s_diagPsramVal);
-    s_diagFlashBar = make_stat_bar(pg, "Flash", RX, 296, &s_diagFlashVal);
+    s_diag.ramBar   = make_stat_bar(pg, "RAM",   RX, 228, &s_diag.ramVal);
+    s_diag.psramBar = make_stat_bar(pg, "PSRAM", RX, 262, &s_diag.psramVal);
+    s_diag.flashBar = make_stat_bar(pg, "Flash", RX, 296, &s_diag.flashVal);
 
     // Wi-Fi signal strength: 4 ascending bars + quality caption.
     lv_obj_t *sl = ui_make_label(pg, "Signal", UI_FONT_SM, UI_COL_TEXT_MUTE);
@@ -2133,18 +2154,18 @@ static void build_diag(lv_obj_t *pg) {
         int h = 14 + i * 14;
         // lv_bar (not lv_obj): the theme styles bar parts with a flat fill, unlike
         // plain objects whose base style has a gradient that mottles the small bars.
-        s_diagSigBar[i] = lv_bar_create(pg);
-        lv_obj_set_size(s_diagSigBar[i], bw, h);
-        lv_obj_align(s_diagSigBar[i], LV_ALIGN_TOP_LEFT, RX + 64 + i * (bw + bgap), baseY - h);
-        lv_bar_set_range(s_diagSigBar[i], 0, 100);
-        lv_bar_set_value(s_diagSigBar[i], 100, LV_ANIM_OFF);   // always full; strength shown by color
-        lv_obj_set_style_border_width(s_diagSigBar[i], 0, LV_PART_MAIN);
-        lv_obj_set_style_radius(s_diagSigBar[i], 3, LV_PART_MAIN);
-        lv_obj_set_style_radius(s_diagSigBar[i], 3, LV_PART_INDICATOR);
-        lv_obj_set_style_bg_color(s_diagSigBar[i], lv_color_hex(0x2a3550), LV_PART_INDICATOR);
+        s_diag.sigBar[i] = lv_bar_create(pg);
+        lv_obj_set_size(s_diag.sigBar[i], bw, h);
+        lv_obj_align(s_diag.sigBar[i], LV_ALIGN_TOP_LEFT, RX + 64 + i * (bw + bgap), baseY - h);
+        lv_bar_set_range(s_diag.sigBar[i], 0, 100);
+        lv_bar_set_value(s_diag.sigBar[i], 100, LV_ANIM_OFF);   // always full; strength shown by color
+        lv_obj_set_style_border_width(s_diag.sigBar[i], 0, LV_PART_MAIN);
+        lv_obj_set_style_radius(s_diag.sigBar[i], 3, LV_PART_MAIN);
+        lv_obj_set_style_radius(s_diag.sigBar[i], 3, LV_PART_INDICATOR);
+        lv_obj_set_style_bg_color(s_diag.sigBar[i], lv_color_hex(0x2a3550), LV_PART_INDICATOR);
     }
-    s_diagSigTxt = ui_make_label(pg, "--", UI_FONT_MD, UI_COL_TEXT_MUTE);
-    lv_obj_align(s_diagSigTxt, LV_ALIGN_TOP_LEFT, RX + 64 + 4 * (bw + bgap) + 14, baseY - 26);
+    s_diag.sigTxt = ui_make_label(pg, "--", UI_FONT_MD, UI_COL_TEXT_MUTE);
+    lv_obj_align(s_diag.sigTxt, LV_ALIGN_TOP_LEFT, RX + 64 + 4 * (bw + bgap) + 14, baseY - 26);
 }
 
 // ---------------------------------------------------------------------------
@@ -2154,35 +2175,35 @@ static void build_diag(lv_obj_t *pg) {
 // bar. Shown by ui_alert_set() when the data layer sees a new qualifying alert;
 // hidden on Acknowledge or after settings().alertDismissMin (see ui_tick()).
 static void alert_ack_cb(lv_event_t *) {
-    if (s_alertBar) lv_obj_add_flag(s_alertBar, LV_OBJ_FLAG_HIDDEN);
+    if (s_alert.bar) lv_obj_add_flag(s_alert.bar, LV_OBJ_FLAG_HIDDEN);
 }
 
 static void build_alert_overlay() {
     lv_obj_t *top = lv_layer_top();
-    s_alertBar = lv_obj_create(top);
-    lv_obj_set_size(s_alertBar, LV_HOR_RES, 128);
-    lv_obj_set_pos(s_alertBar, 0, 0);
-    lv_obj_set_style_bg_color(s_alertBar, lv_color_hex(0xc62828), 0);
-    lv_obj_set_style_bg_opa(s_alertBar, LV_OPA_COVER, 0);
-    lv_obj_set_style_border_width(s_alertBar, 0, 0);
-    lv_obj_set_style_radius(s_alertBar, 0, 0);
-    lv_obj_set_style_pad_all(s_alertBar, 14, 0);
-    lv_obj_clear_flag(s_alertBar, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_add_flag(s_alertBar, LV_OBJ_FLAG_HIDDEN);
+    s_alert.bar = lv_obj_create(top);
+    lv_obj_set_size(s_alert.bar, LV_HOR_RES, 128);
+    lv_obj_set_pos(s_alert.bar, 0, 0);
+    lv_obj_set_style_bg_color(s_alert.bar, lv_color_hex(0xc62828), 0);
+    lv_obj_set_style_bg_opa(s_alert.bar, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(s_alert.bar, 0, 0);
+    lv_obj_set_style_radius(s_alert.bar, 0, 0);
+    lv_obj_set_style_pad_all(s_alert.bar, 14, 0);
+    lv_obj_clear_flag(s_alert.bar, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(s_alert.bar, LV_OBJ_FLAG_HIDDEN);
 
     const int textW = LV_HOR_RES - 28 - 180;   // leave room for the Acknowledge button
 
-    s_alertEvent = ui_make_label(s_alertBar, "", UI_FONT_LG, UI_COL_WHITE);
-    lv_label_set_long_mode(s_alertEvent, LV_LABEL_LONG_DOT);
-    lv_obj_set_width(s_alertEvent, textW);
-    lv_obj_align(s_alertEvent, LV_ALIGN_TOP_LEFT, 0, 0);
+    s_alert.event = ui_make_label(s_alert.bar, "", UI_FONT_LG, UI_COL_WHITE);
+    lv_label_set_long_mode(s_alert.event, LV_LABEL_LONG_DOT);
+    lv_obj_set_width(s_alert.event, textW);
+    lv_obj_align(s_alert.event, LV_ALIGN_TOP_LEFT, 0, 0);
 
-    s_alertHead = ui_make_label(s_alertBar, "", UI_FONT_SM, UI_COL_WHITE);
-    lv_label_set_long_mode(s_alertHead, LV_LABEL_LONG_WRAP);
-    lv_obj_set_width(s_alertHead, textW);
-    lv_obj_align(s_alertHead, LV_ALIGN_TOP_LEFT, 0, 32);
+    s_alert.head = ui_make_label(s_alert.bar, "", UI_FONT_SM, UI_COL_WHITE);
+    lv_label_set_long_mode(s_alert.head, LV_LABEL_LONG_WRAP);
+    lv_obj_set_width(s_alert.head, textW);
+    lv_obj_align(s_alert.head, LV_ALIGN_TOP_LEFT, 0, 32);
 
-    lv_obj_t *ack = lv_btn_create(s_alertBar);
+    lv_obj_t *ack = lv_btn_create(s_alert.bar);
     lv_obj_set_size(ack, 168, 56);
     lv_obj_align(ack, LV_ALIGN_RIGHT_MID, 0, 0);
     lv_obj_set_style_bg_color(ack, lv_color_hex(0x1c2331), 0);
@@ -2195,7 +2216,7 @@ static void build_alert_overlay() {
 
 void ui_alert_set(int severity, const String &event, const String &headline) {
     UiLock _lk;
-    if (!s_alertBar) return;
+    if (!s_alert.bar) return;
     uint32_t bg;
     switch (severity) {
         case 4:  bg = 0x8b0000; break;   // Extreme  - dark red
@@ -2204,17 +2225,17 @@ void ui_alert_set(int severity, const String &event, const String &headline) {
         case 1:  bg = 0xf9a825; break;   // Minor    - amber
         default: bg = 0x546e7a; break;   // Unknown  - slate
     }
-    lv_obj_set_style_bg_color(s_alertBar, lv_color_hex(bg), 0);
-    if (s_alertEvent) lv_label_set_text(s_alertEvent, (String(LV_SYMBOL_WARNING "  ") + event).c_str());
-    if (s_alertHead)  lv_label_set_text(s_alertHead, headline.length() ? headline.c_str() : event.c_str());
-    lv_obj_move_foreground(s_alertBar);
-    lv_obj_clear_flag(s_alertBar, LV_OBJ_FLAG_HIDDEN);
-    s_alertShownMs = millis();
+    lv_obj_set_style_bg_color(s_alert.bar, lv_color_hex(bg), 0);
+    if (s_alert.event) lv_label_set_text(s_alert.event, (String(LV_SYMBOL_WARNING "  ") + event).c_str());
+    if (s_alert.head)  lv_label_set_text(s_alert.head, headline.length() ? headline.c_str() : event.c_str());
+    lv_obj_move_foreground(s_alert.bar);
+    lv_obj_clear_flag(s_alert.bar, LV_OBJ_FLAG_HIDDEN);
+    s_alert.shownMs = millis();
 }
 
 void ui_alert_clear() {
     UiLock _lk;
-    if (s_alertBar) lv_obj_add_flag(s_alertBar, LV_OBJ_FLAG_HIDDEN);
+    if (s_alert.bar) lv_obj_add_flag(s_alert.bar, LV_OBJ_FLAG_HIDDEN);
 }
 
 void ui_init() {
@@ -2260,31 +2281,31 @@ void ui_init() {
 }
 
 static void update_cal_hero() {
-    if (!s_calHero) return;
-    if (s_calView != CAL_LIST) { lv_obj_add_flag(s_calHero, LV_OBJ_FLAG_HIDDEN); return; }
+    if (!s_cal.hero) return;
+    if (s_cal.view != CAL_LIST) { lv_obj_add_flag(s_cal.hero, LV_OBJ_FLAG_HIDDEN); return; }
     time_t now = time(nullptr);
-    if (now < 100000 || s_calAllCount == 0) {
-        lv_obj_add_flag(s_calHero, LV_OBJ_FLAG_HIDDEN);
+    if (now < 100000 || s_cal.allCount == 0) {
+        lv_obj_add_flag(s_cal.hero, LV_OBJ_FLAG_HIDDEN);
         return;
     }
     // First event that hasn't started yet (list is sorted ascending; allow a 60s grace).
     int idx = -1;
-    for (int i = 0; i < s_calAllCount; i++) {
-        if ((long)s_calAll[i].start > (long)now - 60) { idx = i; break; }
+    for (int i = 0; i < s_cal.allCount; i++) {
+        if ((long)s_cal.all[i].start > (long)now - 60) { idx = i; break; }
     }
-    if (idx < 0) { lv_obj_add_flag(s_calHero, LV_OBJ_FLAG_HIDDEN); return; }
-    lv_obj_clear_flag(s_calHero, LV_OBJ_FLAG_HIDDEN);
-    s_calHeroIdx = idx;
+    if (idx < 0) { lv_obj_add_flag(s_cal.hero, LV_OBJ_FLAG_HIDDEN); return; }
+    lv_obj_clear_flag(s_cal.hero, LV_OBJ_FLAG_HIDDEN);
+    s_cal.heroIdx = idx;
 
-    const CalEvent &e = s_calAll[idx];
+    const CalEvent &e = s_cal.all[idx];
     long diff = (long)e.start - (long)now;                 // seconds until start
 
     bool nowish = diff <= 60;
     uint32_t accent = nowish ? 0x1f9d57 : 0x2f80ed;
-    lv_label_set_text(s_calHeroTag, nowish ? "NOW" : "UP NEXT");
-    lv_obj_set_style_bg_color(s_calHeroTag, lv_color_hex(accent), 0);
-    lv_obj_set_style_border_color(s_calHero, lv_color_hex(accent), 0);
-    lv_label_set_text(s_calHeroTitle, e.title.length() ? e.title.c_str() : "(no title)");
+    lv_label_set_text(s_cal.heroTag, nowish ? "NOW" : "UP NEXT");
+    lv_obj_set_style_bg_color(s_cal.heroTag, lv_color_hex(accent), 0);
+    lv_obj_set_style_border_color(s_cal.hero, lv_color_hex(accent), 0);
+    lv_label_set_text(s_cal.heroTitle, e.title.length() ? e.title.c_str() : "(no title)");
 
     char cd[24];
     if      (diff <= 60)   snprintf(cd, sizeof(cd), "now");
@@ -2313,8 +2334,8 @@ static void update_cal_hero() {
                snprintf(tbuf, sizeof(tbuf), "%d:%02d %s", h12, tm.tm_min, tm.tm_hour < 12 ? "AM" : "PM"); }
         snprintf(when, sizeof(when), "%s %s  -  %s", day, tbuf, cd);
     }
-    lv_label_set_text(s_calHeroWhen, when);
-    lv_obj_set_style_text_color(s_calHeroWhen,
+    lv_label_set_text(s_cal.heroWhen, when);
+    lv_obj_set_style_text_color(s_cal.heroWhen,
                                 lv_color_hex(diff < 600 ? 0xffd166 : 0x9fd0ff), 0);
 }
 
@@ -2328,10 +2349,10 @@ static void update_clock() {
     char buf[16];
     if (settings().use24hClock) strftime(buf, sizeof(buf), "%H:%M", &t);
     else                        strftime(buf, sizeof(buf), "%I:%M %p", &t);
-    lv_label_set_text(s_clockTime, buf);
+    lv_label_set_text(s_home.clockTime, buf);
     char dbuf[48];
     strftime(dbuf, sizeof(dbuf), "%A, %B %d", &t);
-    lv_label_set_text(s_clockDate, dbuf);
+    lv_label_set_text(s_home.clockDate, dbuf);
     topbar_relayout();
     draw_sky(t.tm_hour * 60 + t.tm_min);
     update_sun_labels();
@@ -2342,25 +2363,25 @@ static void update_config_page() {
 
     NetState st = net_state();
     if (st == NetState::Portal) {
-        lv_label_set_text(s_cfgState, "Setup needed - join the hotspot");
+        lv_label_set_text(s_cfg.state, "Setup needed - join the hotspot");
         String d = "1. On your phone, join Wi-Fi network:\n     \"" + net_ssid() + "\"\n"
                    "2. The setup page opens automatically,\n     or visit http://" + net_ip() +
                    "\n3. Enter your home Wi-Fi details.\n\nScan the code to open setup:";
-        lv_label_set_text(s_cfgDetails, d.c_str());
+        lv_label_set_text(s_cfg.details, d.c_str());
         render_qr("http://" + net_ip());
     } else if (st == NetState::Connected) {
-        lv_label_set_text(s_cfgState, "Connected");
+        lv_label_set_text(s_cfg.state, "Connected");
         String url = "http://" + net_hostname();
         String d = "Network:  " + net_ssid() + "\nIP:  " + net_ip() +
                    "\n\nEdit any setting from a browser on\nyour network:\n     " + url +
                    "\n     (or http://" + net_ip() + " )\n\n"
                    "Grab a clean screenshot in a browser:\n     http://" + net_ip() + "/screenshot.bmp" +
                    "\n\nScan to open:";
-        lv_label_set_text(s_cfgDetails, d.c_str());
+        lv_label_set_text(s_cfg.details, d.c_str());
         render_qr(url);
     } else {
-        lv_label_set_text(s_cfgState, "Connecting...");
-        lv_label_set_text(s_cfgDetails, "Joining your Wi-Fi network...");
+        lv_label_set_text(s_cfg.state, "Connecting...");
+        lv_label_set_text(s_cfg.details, "Joining your Wi-Fi network...");
     }
 }
 
@@ -2380,7 +2401,7 @@ static const char *reset_reason_str(esp_reset_reason_t r) {
 }
 
 static void update_diag_page() {
-    if (s_active != PAGE_DIAG || !s_diagLbl) return;
+    if (s_active != PAGE_DIAG || !s_diag.lbl) return;
 
     uint32_t up = millis() / 1000;
     uint32_t dd = up / 86400; up %= 86400;
@@ -2409,24 +2430,24 @@ static void update_diag_page() {
         reset_reason_str(esp_reset_reason()),
         __DATE__, __TIME__,
         LVGL_VERSION_MAJOR, LVGL_VERSION_MINOR, LVGL_VERSION_PATCH);
-    lv_label_set_text(s_diagLbl, b);
+    lv_label_set_text(s_diag.lbl, b);
 
     // Live trend sparklines: heap autoscales; RSSI is fixed to a readable dBm band.
-    draw_diag_spark(s_diagHeapSpark, s_heapHist, s_diagCount, true, 0, 0, 0x39d98a);
-    draw_diag_spark(s_diagRssiSpark, s_rssiHist, s_diagCount, false, -90.0f, -30.0f, 0x5aa9ff);
+    draw_diag_spark(s_diag.heapSpark, s_diag.heapHist, s_diag.count, true, 0, 0, 0x39d98a);
+    draw_diag_spark(s_diag.rssiSpark, s_diag.rssiHist, s_diag.count, false, -90.0f, -30.0f, 0x5aa9ff);
     // Board-only trends: die temperature + render FPS (autoscaled, narrower canvas).
-    draw_diag_spark(s_diagTempSpark, s_tempHist, s_diagCount, true, 0, 0, 0xffb454, 340, 56);
-    draw_diag_spark(s_diagFpsSpark,  s_fpsHist,  s_diagCount, true, 0, 0, 0xa78bfa, 340, 56);
+    draw_diag_spark(s_diag.tempSpark, s_diag.tempHist, s_diag.count, true, 0, 0, 0xffb454, 340, 56);
+    draw_diag_spark(s_diag.fpsSpark,  s_diag.fpsHist,  s_diag.count, true, 0, 0, 0xa78bfa, 340, 56);
     char v[24];
     snprintf(v, sizeof(v), "%u KB", (unsigned)(heap / 1024));
-    lv_label_set_text(s_diagHeapVal, v);
-    if (online) { snprintf(v, sizeof(v), "%d", (int)WiFi.RSSI()); lv_label_set_text(s_diagRssiVal, v); }
-    else        { lv_label_set_text(s_diagRssiVal, "--"); }
-    if (s_diagCount > 0) {
-        snprintf(v, sizeof(v), "%.0fF", s_tempHist[s_diagCount - 1]);
-        lv_label_set_text(s_diagTempVal, v);
-        snprintf(v, sizeof(v), "%.1f", s_fpsHist[s_diagCount - 1]);
-        lv_label_set_text(s_diagFpsVal, v);
+    lv_label_set_text(s_diag.heapVal, v);
+    if (online) { snprintf(v, sizeof(v), "%d", (int)WiFi.RSSI()); lv_label_set_text(s_diag.rssiVal, v); }
+    else        { lv_label_set_text(s_diag.rssiVal, "--"); }
+    if (s_diag.count > 0) {
+        snprintf(v, sizeof(v), "%.0fF", s_diag.tempHist[s_diag.count - 1]);
+        lv_label_set_text(s_diag.tempVal, v);
+        snprintf(v, sizeof(v), "%.1f", s_diag.fpsHist[s_diag.count - 1]);
+        lv_label_set_text(s_diag.fpsVal, v);
     }
 
     // Resource usage bars.
@@ -2434,18 +2455,18 @@ static void update_diag_page() {
     size_t heapTot = ESP.getHeapSize();
     int ramPct = heapTot ? (int)(100 - ((uint64_t)heap * 100 / heapTot)) : 0;
     snprintf(t, sizeof(t), "%u/%u KB", (unsigned)((heapTot - heap) / 1024), (unsigned)(heapTot / 1024));
-    set_stat_bar(s_diagRamBar, s_diagRamVal, ramPct, t);
+    set_stat_bar(s_diag.ramBar, s_diag.ramVal, ramPct, t);
 
     size_t psTot = heap_caps_get_total_size(MALLOC_CAP_SPIRAM);
     int psPct = psTot ? (int)(100 - ((uint64_t)psram * 100 / psTot)) : 0;
     snprintf(t, sizeof(t), "%.1f/%.1f MB", (psTot - psram) / 1048576.0, psTot / 1048576.0);
-    set_stat_bar(s_diagPsramBar, s_diagPsramVal, psPct, t);
+    set_stat_bar(s_diag.psramBar, s_diag.psramVal, psPct, t);
 
     size_t flUsed = ESP.getSketchSize();
     size_t flTot  = flUsed + ESP.getFreeSketchSpace();
     int flPct = flTot ? (int)((uint64_t)flUsed * 100 / flTot) : 0;
     snprintf(t, sizeof(t), "%.1f/%.1f MB", flUsed / 1048576.0, flTot / 1048576.0);
-    set_stat_bar(s_diagFlashBar, s_diagFlashVal, flPct, t);
+    set_stat_bar(s_diag.flashBar, s_diag.flashVal, flPct, t);
 
     // Wi-Fi signal strength bars + quality caption.
     int bars = 0; const char *q = "offline"; uint32_t sc = 0x8b97b0;
@@ -2457,23 +2478,23 @@ static void update_diag_page() {
         else               { bars = 1; q = "Weak";      sc = 0xff5c5c; }
     }
     for (int i = 0; i < 4; i++)
-        lv_obj_set_style_bg_color(s_diagSigBar[i], lv_color_hex(i < bars ? sc : 0x2a3550), LV_PART_INDICATOR);
-    lv_label_set_text(s_diagSigTxt, q);
-    lv_obj_set_style_text_color(s_diagSigTxt, lv_color_hex(sc), 0);
+        lv_obj_set_style_bg_color(s_diag.sigBar[i], lv_color_hex(i < bars ? sc : 0x2a3550), LV_PART_INDICATOR);
+    lv_label_set_text(s_diag.sigTxt, q);
+    lv_obj_set_style_text_color(s_diag.sigTxt, lv_color_hex(sc), 0);
 }
 
 static void animate_weather() {
-    if (!s_wxIcon || s_wxCode < 0) return;
-    lv_canvas_fill_bg(s_wxIcon, lv_color_hex(0x0f1420), LV_OPA_COVER);
-    wx_draw(s_wxIcon, 48, 48, 38, s_wxCode, (int)s_wxFrame);
+    if (!s_wx.icon || s_wx.code < 0) return;
+    lv_canvas_fill_bg(s_wx.icon, lv_color_hex(0x0f1420), LV_OPA_COVER);
+    wx_draw(s_wx.icon, 48, 48, 38, s_wx.code, (int)s_wx.frame);
 }
 
 void ui_tick() {
     // Weather-panel glyph animates faster than the 500ms housekeeping tick.
     static uint32_t lastAnim = 0;
-    if (s_active == PAGE_WEATHER && s_wxCode >= 0 && millis() - lastAnim >= 150) {
+    if (s_active == PAGE_WEATHER && s_wx.code >= 0 && millis() - lastAnim >= 150) {
         lastAnim = millis();
-        s_wxFrame++;
+        s_wx.frame++;
         animate_weather();
     }
 
@@ -2498,10 +2519,10 @@ void ui_tick() {
     if (s_active == PAGE_CALENDAR) update_cal_hero();
 
     // Auto-dismiss the severe-weather banner after its configured window.
-    if (s_alertBar && !lv_obj_has_flag(s_alertBar, LV_OBJ_FLAG_HIDDEN)) {
+    if (s_alert.bar && !lv_obj_has_flag(s_alert.bar, LV_OBJ_FLAG_HIDDEN)) {
         uint16_t mins = settings().alertDismissMin;
-        if (mins && millis() - s_alertShownMs >= (uint32_t)mins * 60000UL)
-            lv_obj_add_flag(s_alertBar, LV_OBJ_FLAG_HIDDEN);
+        if (mins && millis() - s_alert.shownMs >= (uint32_t)mins * 60000UL)
+            lv_obj_add_flag(s_alert.bar, LV_OBJ_FLAG_HIDDEN);
     }
 }
 
@@ -2512,18 +2533,18 @@ void ui_tick() {
 // (Humidity/Wind on the left, Feels-like/UV on the right). Feels-like is shown
 // only when it differs from the actual temp; UV is per-band recolored.
 static void compose_wx_body() {
-    if (s_wxCond) lv_label_set_text(s_wxCond, s_wxSummary.c_str());
-    if (s_weatherBody) {
+    if (s_wx.cond) lv_label_set_text(s_wx.cond, s_wx.summary.c_str());
+    if (s_wx.body) {
         char b[48];
-        snprintf(b, sizeof(b), "Humidity %d%%\nWind %.0f mph", s_wxHum, s_wxWindMph);
-        lv_label_set_text(s_weatherBody, b);
+        snprintf(b, sizeof(b), "Humidity %d%%\nWind %.0f mph", s_wx.hum, s_wx.windMph);
+        lv_label_set_text(s_wx.body, b);
     }
-    if (s_wxDetail) {
+    if (s_wx.detail) {
         char d[80]; int n = 0;
-        if (s_wxFeelsF > -999.0f && fabsf(s_wxFeelsF - s_wxTempF) >= 1.0f)
-            n += snprintf(d + n, sizeof(d) - n, "Feels %.0fF", s_wxFeelsF);
-        if (s_wxUvIdx >= 0) {
-            uint32_t uc; const char *band; float uv = s_wxUvIdx;
+        if (s_wx.feelsF > -999.0f && fabsf(s_wx.feelsF - s_wx.tempF) >= 1.0f)
+            n += snprintf(d + n, sizeof(d) - n, "Feels %.0fF", s_wx.feelsF);
+        if (s_wx.uvIdx >= 0) {
+            uint32_t uc; const char *band; float uv = s_wx.uvIdx;
             if (uv < 3)       { uc = 0x54d98a; band = "Low"; }
             else if (uv < 6)  { uc = 0xe6c34a; band = "Moderate"; }
             else if (uv < 8)  { uc = 0xef8a3b; band = "High"; }
@@ -2532,34 +2553,34 @@ static void compose_wx_body() {
             n += snprintf(d + n, sizeof(d) - n, "%s#%06X UV %.0f %s#",
                           n ? "\n" : "", (unsigned)uc, uv, band);
         }
-        lv_label_set_text(s_wxDetail, d);
+        lv_label_set_text(s_wx.detail, d);
     }
 }
 
 void ui_weather_set(int code, const String &summary, float tempC, int humidity, float windKph, float feelsC) {
     UiLock _lk;
     float temp = tempC * 9.0f / 5.0f + 32.0f;
-    if (s_wxTemp) {
+    if (s_wx.temp) {
         char t[16]; snprintf(t, sizeof(t), "%.0fF", temp);
-        lv_label_set_text(s_wxTemp, t);
+        lv_label_set_text(s_wx.temp, t);
     }
-    if (s_wxLoc) {
+    if (s_wx.loc) {
         const String &loc = settings().locationName;
         if (loc.length()) {
-            lv_label_set_text(s_wxLoc, loc.c_str());
+            lv_label_set_text(s_wx.loc, loc.c_str());
         } else {
             char l[48]; snprintf(l, sizeof(l), "%.3f, %.3f",
                                  settings().homeLat, settings().homeLon);
-            lv_label_set_text(s_wxLoc, l);
+            lv_label_set_text(s_wx.loc, l);
         }
     }
-    s_wxSummary = summary;
-    s_wxHum     = humidity;
-    s_wxWindMph = windKph * 0.621371f;
-    s_wxFeelsF  = feelsC * 9.0f / 5.0f + 32.0f;
-    s_wxTempF   = temp;
+    s_wx.summary = summary;
+    s_wx.hum     = humidity;
+    s_wx.windMph = windKph * 0.621371f;
+    s_wx.feelsF  = feelsC * 9.0f / 5.0f + 32.0f;
+    s_wx.tempF   = temp;
     compose_wx_body();
-    s_wxCode = code;
+    s_wx.code = code;
     s_wxHave = true;                                   // enable offline last-good (#1)
     page_set_loading(PAGE_WEATHER, false);
     animate_weather();
@@ -2569,20 +2590,20 @@ void ui_weather_error(const String &msg) {
     UiLock _lk;
     page_set_loading(PAGE_WEATHER, false);
     if (s_wxHave) return;                               // keep last-good conditions when offline (#1)
-    if (s_wxCond) lv_label_set_text(s_wxCond, msg.c_str());
+    if (s_wx.cond) lv_label_set_text(s_wx.cond, msg.c_str());
 }
 
 void ui_weather_uv_set(float uvIndex) {
     UiLock _lk;
-    s_wxUvIdx = uvIndex;
+    s_wx.uvIdx = uvIndex;
     compose_wx_body();
 }
 
 void ui_forecast_set(DayForecast *days, int count) {
     UiLock _lk;
     if (count > UI_FORECAST_DAYS) count = UI_FORECAST_DAYS;
-    s_forecastCount = count;
-    for (int i = 0; i < count; i++) s_forecast[i] = days[i];
+    s_wx.forecastCount = count;
+    for (int i = 0; i < count; i++) s_wx.forecast[i] = days[i];
 
     time_t now = time(nullptr);
     bool haveTime = now > 100000;
@@ -2591,23 +2612,23 @@ void ui_forecast_set(DayForecast *days, int count) {
     static const char *WD[7] = {"Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"};
 
     for (int i = 0; i < UI_FORECAST_DAYS; i++) {
-        if (!s_fcCard[i]) continue;
-        if (i >= count) { lv_obj_add_flag(s_fcCard[i], LV_OBJ_FLAG_HIDDEN); continue; }
-        lv_obj_clear_flag(s_fcCard[i], LV_OBJ_FLAG_HIDDEN);
+        if (!s_wx.fcCard[i]) continue;
+        if (i >= count) { lv_obj_add_flag(s_wx.fcCard[i], LV_OBJ_FLAG_HIDDEN); continue; }
+        lv_obj_clear_flag(s_wx.fcCard[i], LV_OBJ_FLAG_HIDDEN);
 
         char d[8];
         if (i == 0)          snprintf(d, sizeof(d), "Today");
         else if (haveTime)   snprintf(d, sizeof(d), "%s", WD[(t.tm_wday + i) % 7]);
         else                 snprintf(d, sizeof(d), "+%d", i);
-        lv_label_set_text(s_fcDay[i], d);
+        lv_label_set_text(s_wx.fcDay[i], d);
 
-        lv_canvas_fill_bg(s_fcIcon[i], lv_color_hex(0x141c2e), LV_OPA_COVER);
-        wx_draw(s_fcIcon[i], 28, 28, 22, s_forecast[i].code);
+        lv_canvas_fill_bg(s_wx.fcIcon[i], lv_color_hex(0x141c2e), LV_OPA_COVER);
+        wx_draw(s_wx.fcIcon[i], 28, 28, 22, s_wx.forecast[i].code);
 
-        float hi = s_forecast[i].hiC * 9.0f / 5.0f + 32.0f;
-        float lo = s_forecast[i].loC * 9.0f / 5.0f + 32.0f;
+        float hi = s_wx.forecast[i].hiC * 9.0f / 5.0f + 32.0f;
+        float lo = s_wx.forecast[i].loC * 9.0f / 5.0f + 32.0f;
         char tt[16]; snprintf(tt, sizeof(tt), "%.0f/%.0f", hi, lo);
-        lv_label_set_text(s_fcTemp[i], tt);
+        lv_label_set_text(s_wx.fcTemp[i], tt);
     }
 }
 
@@ -2634,13 +2655,13 @@ static inline String flight_id(const FlightRow &r) {
 }
 static int trail_find(const String &id) {
     for (int k = 0; k < UI_MAX_FLIGHTS; k++)
-        if (s_trails[k].used && s_trails[k].id == id) return k;
+        if (s_fl.trails[k].used && s_fl.trails[k].id == id) return k;
     return -1;
 }
 
 static void draw_radar() {
-    if (!s_flightsRadar) return;
-    lv_obj_t *cv = s_flightsRadar;
+    if (!s_fl.radar) return;
+    lv_obj_t *cv = s_fl.radar;
     const int cx = RADAR_PX / 2, cy = RADAR_PX / 2;
     const int radiusPx = RADAR_PX / 2 - 24;   // leave room for compass + ring labels
 
@@ -2676,7 +2697,7 @@ static void draw_radar() {
     lv_draw_line_dsc_t sweep; lv_draw_line_dsc_init(&sweep);
     sweep.width = 2; sweep.round_start = 1; sweep.round_end = 1;
     for (int t = 5; t >= 0; t--) {
-        float ang = (s_sweepDeg - t * 7.0f) * DEG2RAD;
+        float ang = (s_fl.sweepDeg - t * 7.0f) * DEG2RAD;
         int ex = cx + (int)lroundf(sinf(ang) * radiusPx);
         int ey = cy - (int)lroundf(cosf(ang) * radiusPx);
         sweep.color = lv_color_hex(0x33ff88);
@@ -2695,20 +2716,20 @@ static void draw_radar() {
     lead.width = 2; lead.round_start = 1; lead.round_end = 1;
     lead.color = lv_color_hex(0xffb020); lead.opa = LV_OPA_50;
 
-    for (int i = 0; i < UI_MAX_FLIGHTS; i++) s_planePx[i] = -10000;   // reset hit targets
-    for (int i = 0; i < s_flightCount; i++) {
-        int dist = s_flightRows[i].distNm;
+    for (int i = 0; i < UI_MAX_FLIGHTS; i++) s_fl.planePx[i] = -10000;   // reset hit targets
+    for (int i = 0; i < s_fl.count; i++) {
+        int dist = s_fl.rows[i].distNm;
         if (dist > range) continue;                 // outside the current zoom
         float rr = (float)dist / (float)range * (float)radiusPx;
-        float br = s_flightRows[i].bearing * DEG2RAD;
+        float br = s_fl.rows[i].bearing * DEG2RAD;
         int px = cx + (int)lroundf(rr * sinf(br));
         int py = cy - (int)lroundf(rr * cosf(br));
-        s_planePx[i] = (lv_coord_t)px; s_planePy[i] = (lv_coord_t)py;
+        s_fl.planePx[i] = (lv_coord_t)px; s_fl.planePy[i] = (lv_coord_t)py;
 
         // Flown-path breadcrumb trail (older segments fade out).
-        int tk = trail_find(flight_id(s_flightRows[i]));
-        if (tk >= 0 && s_trails[tk].len >= 2) {
-            const PlaneTrail &tr = s_trails[tk];
+        int tk = trail_find(flight_id(s_fl.rows[i]));
+        if (tk >= 0 && s_fl.trails[tk].len >= 2) {
+            const PlaneTrail &tr = s_fl.trails[tk];
             float sc = (float)radiusPx / (float)range;
             lv_draw_line_dsc_t trl; lv_draw_line_dsc_init(&trl);
             trl.width = 2; trl.round_start = 1; trl.round_end = 1;
@@ -2725,14 +2746,14 @@ static void draw_radar() {
             }
         }
 
-        int trk = s_flightRows[i].track;
+        int trk = s_fl.rows[i].track;
         if (trk >= 0) {
             float th = trk * DEG2RAD;
             float fx = sinf(th), fy = -cosf(th);   // heading forward vector (north up)
             float gx = -fy,      gy = fx;          // perpendicular (right of heading)
 
             // Leader line: project ~2 min ahead at current ground speed.
-            int gs = s_flightRows[i].gs;
+            int gs = s_fl.rows[i].gs;
             if (gs > 0) {
                 float leadPx = (gs / 60.0f * 2.0f) / (float)range * (float)radiusPx;
                 if (leadPx > radiusPx) leadPx = radiusPx;
@@ -2757,7 +2778,7 @@ static void draw_radar() {
         }
 
         char lbl[24];
-        snprintf(lbl, sizeof(lbl), "%d %s", i + 1, s_flightRows[i].tail.c_str());
+        snprintf(lbl, sizeof(lbl), "%d %s", i + 1, s_fl.rows[i].tail.c_str());
         lv_canvas_draw_text(cv, px + 6, py - 7, 90, &plbl, lbl);
     }
 
@@ -2769,11 +2790,11 @@ static void draw_radar() {
 void ui_flights_set(FlightRow *rows, int count) {
     UiLock _lk;
     if (count > UI_MAX_FLIGHTS) count = UI_MAX_FLIGHTS;
-    s_flightCount = count;
-    for (int i = 0; i < count; i++) s_flightRows[i] = rows[i];
+    s_fl.count = count;
+    for (int i = 0; i < count; i++) s_fl.rows[i] = rows[i];
 
     // Record flown-path history in zoom-independent NM coords, keyed by identity.
-    s_trailPoll++;
+    s_fl.trailPoll++;
     for (int i = 0; i < count; i++) {
         String id = flight_id(rows[i]);
         if (!id.length()) continue;
@@ -2783,15 +2804,15 @@ void ui_flights_set(FlightRow *rows, int count) {
         int k = trail_find(id);
         if (k < 0) {
             for (int j = 0; j < UI_MAX_FLIGHTS && k < 0; j++)
-                if (!s_trails[j].used) k = j;
+                if (!s_fl.trails[j].used) k = j;
             if (k < 0) {                       // evict least-recently-seen slot
-                k = 0; uint32_t oldest = s_trails[0].lastSeen;
+                k = 0; uint32_t oldest = s_fl.trails[0].lastSeen;
                 for (int j = 1; j < UI_MAX_FLIGHTS; j++)
-                    if (s_trails[j].lastSeen < oldest) { oldest = s_trails[j].lastSeen; k = j; }
+                    if (s_fl.trails[j].lastSeen < oldest) { oldest = s_fl.trails[j].lastSeen; k = j; }
             }
-            s_trails[k].used = true; s_trails[k].id = id; s_trails[k].len = 0;
+            s_fl.trails[k].used = true; s_fl.trails[k].id = id; s_fl.trails[k].len = 0;
         }
-        PlaneTrail &tr = s_trails[k];
+        PlaneTrail &tr = s_fl.trails[k];
         bool moved = tr.len == 0 ||
                      fabsf(xn - tr.xnm[tr.len - 1]) > 0.05f ||
                      fabsf(yn - tr.ynm[tr.len - 1]) > 0.05f;
@@ -2802,34 +2823,34 @@ void ui_flights_set(FlightRow *rows, int count) {
             }
             tr.xnm[tr.len] = xn; tr.ynm[tr.len] = yn; tr.len++;
         }
-        tr.lastSeen = s_trailPoll;
+        tr.lastSeen = s_fl.trailPoll;
     }
     for (int j = 0; j < UI_MAX_FLIGHTS; j++)    // drop trails for departed aircraft
-        if (s_trails[j].used && s_trails[j].lastSeen != s_trailPoll) {
-            s_trails[j].used = false; s_trails[j].id = "";
+        if (s_fl.trails[j].used && s_fl.trails[j].lastSeen != s_fl.trailPoll) {
+            s_fl.trails[j].used = false; s_fl.trails[j].id = "";
         }
 
-    if (s_flightsTable) {
-        lv_table_set_row_cnt(s_flightsTable, count + 1);
+    if (s_fl.table) {
+        lv_table_set_row_cnt(s_fl.table, count + 1);
         for (int i = 0; i < count; i++) {
             char n[8]; snprintf(n, sizeof(n), "%d", i + 1);
-            lv_table_set_cell_value(s_flightsTable, i + 1, 0, n);
-            lv_table_set_cell_value(s_flightsTable, i + 1, 1, rows[i].tail.c_str());
-            lv_table_set_cell_value(s_flightsTable, i + 1, 2, rows[i].type.c_str());
+            lv_table_set_cell_value(s_fl.table, i + 1, 0, n);
+            lv_table_set_cell_value(s_fl.table, i + 1, 1, rows[i].tail.c_str());
+            lv_table_set_cell_value(s_fl.table, i + 1, 2, rows[i].type.c_str());
             char a[12]; snprintf(a, sizeof(a), "%d", rows[i].altFt);
-            lv_table_set_cell_value(s_flightsTable, i + 1, 3, a);
+            lv_table_set_cell_value(s_fl.table, i + 1, 3, a);
             char d[12]; snprintf(d, sizeof(d), "%d NM", rows[i].distNm);
-            lv_table_set_cell_value(s_flightsTable, i + 1, 4, d);
+            lv_table_set_cell_value(s_fl.table, i + 1, 4, d);
             char b[12]; snprintf(b, sizeof(b), "%d", rows[i].bearing);
-            lv_table_set_cell_value(s_flightsTable, i + 1, 5, b);
+            lv_table_set_cell_value(s_fl.table, i + 1, 5, b);
         }
     }
 
     char st[64];
     snprintf(st, sizeof(st), "%d aircraft nearby   data: adsb.fi", count);
-    if (s_flightsStatus) {
-        lv_label_set_text(s_flightsStatus, st);
-        lv_obj_set_style_text_color(s_flightsStatus, lv_color_hex(0x8b97b0), 0);
+    if (s_fl.status) {
+        lv_label_set_text(s_fl.status, st);
+        lv_obj_set_style_text_color(s_fl.status, lv_color_hex(0x8b97b0), 0);
     }
     s_flightsHave = true;                              // enable offline last-good (#1)
     page_set_loading(PAGE_FLIGHTS, false);
@@ -2842,52 +2863,52 @@ void ui_flights_error(const String &msg) {
     UiLock _lk;
     page_set_loading(PAGE_FLIGHTS, false);
     if (s_flightsHave) {                               // keep radar/table; just flag staleness (#1)
-        if (s_flightsStatus) {
+        if (s_fl.status) {
             char st[80]; snprintf(st, sizeof(st), "%s  (offline - last update)", msg.c_str());
-            lv_label_set_text(s_flightsStatus, st);
-            lv_obj_set_style_text_color(s_flightsStatus, lv_color_hex(0xffb454), 0);
+            lv_label_set_text(s_fl.status, st);
+            lv_obj_set_style_text_color(s_fl.status, lv_color_hex(0xffb454), 0);
         }
         return;
     }
-    if (s_flightsStatus) lv_label_set_text(s_flightsStatus, msg.c_str());
+    if (s_fl.status) lv_label_set_text(s_fl.status, msg.c_str());
 }
 
 void ui_tickers_set(TickerRow *rows, int count) {
     UiLock _lk;
-    if (!s_tkList) return;
+    if (!s_tk.list) return;
     if (count > 8) count = 8;
     int ok = 0;
     for (int i = 0; i < 8; i++) {
-        if (!s_tkCard[i]) continue;
-        if (i >= count) { lv_obj_add_flag(s_tkCard[i], LV_OBJ_FLAG_HIDDEN); continue; }
-        lv_obj_clear_flag(s_tkCard[i], LV_OBJ_FLAG_HIDDEN);
+        if (!s_tk.card[i]) continue;
+        if (i >= count) { lv_obj_add_flag(s_tk.card[i], LV_OBJ_FLAG_HIDDEN); continue; }
+        lv_obj_clear_flag(s_tk.card[i], LV_OBJ_FLAG_HIDDEN);
         TickerRow &r = rows[i];
 
-        lv_label_set_text(s_tkSym[i], r.symbol.c_str());
-        lv_label_set_text(s_tkName[i], r.name.length() ? r.name.c_str() : " ");
-        lv_label_set_text(s_tkState[i], r.live ? "LIVE" : "CLOSED");
-        lv_obj_set_style_text_color(s_tkState[i],
+        lv_label_set_text(s_tk.sym[i], r.symbol.c_str());
+        lv_label_set_text(s_tk.name[i], r.name.length() ? r.name.c_str() : " ");
+        lv_label_set_text(s_tk.state[i], r.live ? "LIVE" : "CLOSED");
+        lv_obj_set_style_text_color(s_tk.state[i],
             lv_color_hex(r.live ? 0x39d98a : 0x8b97b0), 0);
 
         if (!r.valid) {
-            lv_label_set_text(s_tkPrice[i], "--");
-            lv_label_set_text(s_tkChange[i], "");
-            lv_canvas_fill_bg(s_tkSpark[i], lv_color_hex(0x141c2e), LV_OPA_COVER);
-            lv_label_set_text(s_tkLo[i], "");
-            lv_label_set_text(s_tkHi[i], "");
+            lv_label_set_text(s_tk.price[i], "--");
+            lv_label_set_text(s_tk.change[i], "");
+            lv_canvas_fill_bg(s_tk.spark[i], lv_color_hex(0x141c2e), LV_OPA_COVER);
+            lv_label_set_text(s_tk.lo[i], "");
+            lv_label_set_text(s_tk.hi[i], "");
             continue;
         }
         ok++;
 
         char p[16]; snprintf(p, sizeof(p), "$%.2f", r.price);
-        lv_label_set_text(s_tkPrice[i], p);
+        lv_label_set_text(s_tk.price[i], p);
 
         bool up = r.changeAbs >= 0;
         char ch[48];
         snprintf(ch, sizeof(ch), "%s %+.2f (%+.2f%%)",
                  up ? LV_SYMBOL_UP : LV_SYMBOL_DOWN, r.changeAbs, r.changePct);
-        lv_label_set_text(s_tkChange[i], ch);
-        lv_obj_set_style_text_color(s_tkChange[i],
+        lv_label_set_text(s_tk.change[i], ch);
+        lv_obj_set_style_text_color(s_tk.change[i],
             lv_color_hex(up ? 0x39d98a : 0xff5c5c), 0);
 
         draw_sparkline(i, r);
@@ -2895,8 +2916,8 @@ void ui_tickers_set(TickerRow *rows, int count) {
         char lo[16], hi[16];
         snprintf(lo, sizeof(lo), "L $%.2f", r.winLo);
         snprintf(hi, sizeof(hi), "H $%.2f", r.winHi);
-        lv_label_set_text(s_tkLo[i], lo);
-        lv_label_set_text(s_tkHi[i], hi);
+        lv_label_set_text(s_tk.lo[i], lo);
+        lv_label_set_text(s_tk.hi[i], hi);
 
         double span = r.winHi - r.winLo;
         if (span < 1e-9) span = 1.0;
@@ -2904,12 +2925,12 @@ void ui_tickers_set(TickerRow *rows, int count) {
         if (frac < 0) frac = 0;
         if (frac > 1) frac = 1;
         int dx = BAR_X + (int)(frac * (BAR_W - 10));
-        lv_obj_align(s_tkBarDot[i], LV_ALIGN_TOP_LEFT, dx, BAR_Y - 2);
+        lv_obj_align(s_tk.barDot[i], LV_ALIGN_TOP_LEFT, dx, BAR_Y - 2);
     }
 
     char st[64];
-    snprintf(st, sizeof(st), "%d/%d quotes  %s  Yahoo", ok, count, TF_LABELS[s_tfIndex]);
-    lv_label_set_text(s_tickersStatus, st);
+    snprintf(st, sizeof(st), "%d/%d quotes  %s  Yahoo", ok, count, TF_LABELS[s_tk.tfIndex]);
+    lv_label_set_text(s_tk.status, st);
     s_tickersHave = true;
     page_set_loading(PAGE_TICKERS, false);
 }
@@ -2917,16 +2938,16 @@ void ui_tickers_set(TickerRow *rows, int count) {
 void ui_tickers_error(const String &msg) {
     UiLock _lk;
     page_set_loading(PAGE_TICKERS, false);
-    if (s_tickersStatus) lv_label_set_text(s_tickersStatus, msg.c_str());
+    if (s_tk.status) lv_label_set_text(s_tk.status, msg.c_str());
 }
 
 void ui_calendar_set(CalEvent *events, int count) {
     UiLock _lk;
-    if (!s_calList) return;
+    if (!s_cal.list) return;
     if (count > CAL_CACHE_N) count = CAL_CACHE_N;
-    s_calAllCount = count;
-    for (int i = 0; i < count; i++) s_calAll[i] = events[i];
-    if (s_calCard) lv_obj_add_flag(s_calCard, LV_OBJ_FLAG_HIDDEN);   // avoid a stale popup
+    s_cal.allCount = count;
+    for (int i = 0; i < count; i++) s_cal.all[i] = events[i];
+    if (s_cal.card) lv_obj_add_flag(s_cal.card, LV_OBJ_FLAG_HIDDEN);   // avoid a stale popup
     s_calHave = true;
     page_set_loading(PAGE_CALENDAR, false);
     cal_render();
@@ -2936,15 +2957,15 @@ void ui_calendar_error(const String &msg) {
     UiLock _lk;
     page_set_loading(PAGE_CALENDAR, false);
     for (int i = 0; i < UI_MAX_EVENTS; i++)
-        if (s_calRow[i]) lv_obj_add_flag(s_calRow[i], LV_OBJ_FLAG_HIDDEN);
-    s_calAllCount = 0;
-    if (s_calHero) lv_obj_add_flag(s_calHero, LV_OBJ_FLAG_HIDDEN);
-    if (s_calGrid) lv_obj_add_flag(s_calGrid, LV_OBJ_FLAG_HIDDEN);
-    for (int i = 0; i < 7; i++) if (s_calDow[i]) lv_obj_add_flag(s_calDow[i], LV_OBJ_FLAG_HIDDEN);
-    if (s_calNav) lv_obj_add_flag(s_calNav, LV_OBJ_FLAG_HIDDEN);
-    if (s_calCard) lv_obj_add_flag(s_calCard, LV_OBJ_FLAG_HIDDEN);
-    if (s_calStatus) { lv_obj_clear_flag(s_calStatus, LV_OBJ_FLAG_HIDDEN);
-                       lv_label_set_text(s_calStatus, msg.c_str()); }
+        if (s_cal.row[i]) lv_obj_add_flag(s_cal.row[i], LV_OBJ_FLAG_HIDDEN);
+    s_cal.allCount = 0;
+    if (s_cal.hero) lv_obj_add_flag(s_cal.hero, LV_OBJ_FLAG_HIDDEN);
+    if (s_cal.grid) lv_obj_add_flag(s_cal.grid, LV_OBJ_FLAG_HIDDEN);
+    for (int i = 0; i < 7; i++) if (s_cal.dow[i]) lv_obj_add_flag(s_cal.dow[i], LV_OBJ_FLAG_HIDDEN);
+    if (s_cal.nav) lv_obj_add_flag(s_cal.nav, LV_OBJ_FLAG_HIDDEN);
+    if (s_cal.card) lv_obj_add_flag(s_cal.card, LV_OBJ_FLAG_HIDDEN);
+    if (s_cal.status) { lv_obj_clear_flag(s_cal.status, LV_OBJ_FLAG_HIDDEN);
+                       lv_label_set_text(s_cal.status, msg.c_str()); }
 }
 
 // Ease an arc's indicator from its current value to a target for a smooth sweep.
@@ -2977,45 +2998,45 @@ static void bar_replay(lv_obj_t *bar) {
 }
 static void replay_page_anims(Page p) {
     if (p == PAGE_AIR) {
-        arc_replay(s_airAqiArc);
-        arc_replay(s_airUvArc);
+        arc_replay(s_air.aqiArc);
+        arc_replay(s_air.uvArc);
     } else if (p == PAGE_DIAG) {
-        bar_replay(s_diagRamBar);
-        bar_replay(s_diagPsramBar);
-        bar_replay(s_diagFlashBar);
+        bar_replay(s_diag.ramBar);
+        bar_replay(s_diag.psramBar);
+        bar_replay(s_diag.flashBar);
     }
 }
 
 void ui_air_set(int usAqi, float pm25, float pm10, float o3, float no2) {
     UiLock _lk;
     int band = aqi_band(usAqi);
-    if (s_airAqiArc) {
+    if (s_air.aqiArc) {
         int v = usAqi; if (v < 0) v = 0; if (v > 300) v = 300;
-        anim_arc_to(s_airAqiArc, v);
-        lv_obj_set_style_arc_color(s_airAqiArc, lv_color_hex(AQI_COLORS[band]), LV_PART_INDICATOR);
+        anim_arc_to(s_air.aqiArc, v);
+        lv_obj_set_style_arc_color(s_air.aqiArc, lv_color_hex(AQI_COLORS[band]), LV_PART_INDICATOR);
     }
-    if (s_airAqi) {
+    if (s_air.aqi) {
         char a[8]; snprintf(a, sizeof(a), "%d", usAqi);
-        lv_label_set_text(s_airAqi, a);
-        lv_obj_set_style_text_color(s_airAqi, lv_color_hex(AQI_COLORS[band]), 0);
+        lv_label_set_text(s_air.aqi, a);
+        lv_obj_set_style_text_color(s_air.aqi, lv_color_hex(AQI_COLORS[band]), 0);
     }
-    if (s_airCat) {
-        lv_label_set_text(s_airCat, AQI_CATS[band]);
-        lv_obj_set_style_text_color(s_airCat, lv_color_hex(AQI_COLORS[band]), 0);
+    if (s_air.cat) {
+        lv_label_set_text(s_air.cat, AQI_CATS[band]);
+        lv_obj_set_style_text_color(s_air.cat, lv_color_hex(AQI_COLORS[band]), 0);
     }
     char v[24];
-    if (s_airPm25) { snprintf(v, sizeof(v), "%.1f ug/m3", pm25); lv_label_set_text(s_airPm25, v); }
-    if (s_airPm10) { snprintf(v, sizeof(v), "%.1f ug/m3", pm10); lv_label_set_text(s_airPm10, v); }
-    if (s_airO3)   { snprintf(v, sizeof(v), "%.1f ug/m3", o3);   lv_label_set_text(s_airO3, v); }
-    if (s_airNo2)  { snprintf(v, sizeof(v), "%.1f ug/m3", no2);  lv_label_set_text(s_airNo2, v); }
-    if (s_airStatus) {
+    if (s_air.pm25) { snprintf(v, sizeof(v), "%.1f ug/m3", pm25); lv_label_set_text(s_air.pm25, v); }
+    if (s_air.pm10) { snprintf(v, sizeof(v), "%.1f ug/m3", pm10); lv_label_set_text(s_air.pm10, v); }
+    if (s_air.o3)   { snprintf(v, sizeof(v), "%.1f ug/m3", o3);   lv_label_set_text(s_air.o3, v); }
+    if (s_air.no2)  { snprintf(v, sizeof(v), "%.1f ug/m3", no2);  lv_label_set_text(s_air.no2, v); }
+    if (s_air.status) {
         const String &loc = settings().locationName;
         char st[64];
         if (loc.length()) snprintf(st, sizeof(st), "%s   data: Open-Meteo", loc.c_str());
         else snprintf(st, sizeof(st), "%.3f, %.3f   data: Open-Meteo",
                       settings().homeLat, settings().homeLon);
-        lv_label_set_text(s_airStatus, st);
-        lv_obj_set_style_text_color(s_airStatus, lv_color_hex(0x8b97b0), 0);
+        lv_label_set_text(s_air.status, st);
+        lv_obj_set_style_text_color(s_air.status, lv_color_hex(0x8b97b0), 0);
     }
     s_airHave = true;                                  // enable offline last-good (#1)
     page_set_loading(PAGE_AIR, false);
@@ -3025,14 +3046,14 @@ void ui_air_error(const String &msg) {
     UiLock _lk;
     page_set_loading(PAGE_AIR, false);
     if (s_airHave) {                                   // keep gauges/values; flag staleness (#1)
-        if (s_airStatus) {
+        if (s_air.status) {
             char st[80]; snprintf(st, sizeof(st), "%s  (offline - last update)", msg.c_str());
-            lv_label_set_text(s_airStatus, st);
-            lv_obj_set_style_text_color(s_airStatus, lv_color_hex(0xffb454), 0);
+            lv_label_set_text(s_air.status, st);
+            lv_obj_set_style_text_color(s_air.status, lv_color_hex(0xffb454), 0);
         }
         return;
     }
-    if (s_airStatus) lv_label_set_text(s_airStatus, msg.c_str());
+    if (s_air.status) lv_label_set_text(s_air.status, msg.c_str());
 }
 
 void ui_air_uv_set(float uvIndex) {
@@ -3043,15 +3064,15 @@ void ui_air_uv_set(float uvIndex) {
     else if (uvIndex < 8)  col = 0xff7e00;   // high
     else if (uvIndex < 11) col = 0xff0000;   // very high
     else                   col = 0x8f3f97;   // extreme
-    if (s_airUvArc) {
+    if (s_air.uvArc) {
         int v = (int)lroundf(uvIndex); if (v < 0) v = 0; if (v > 12) v = 12;
-        anim_arc_to(s_airUvArc, v);
-        lv_obj_set_style_arc_color(s_airUvArc, lv_color_hex(col), LV_PART_INDICATOR);
+        anim_arc_to(s_air.uvArc, v);
+        lv_obj_set_style_arc_color(s_air.uvArc, lv_color_hex(col), LV_PART_INDICATOR);
     }
-    if (s_airUv) {
+    if (s_air.uv) {
         char b[8]; snprintf(b, sizeof(b), "%.0f", uvIndex);
-        lv_label_set_text(s_airUv, b);
-        lv_obj_set_style_text_color(s_airUv, lv_color_hex(col), 0);
+        lv_label_set_text(s_air.uv, b);
+        lv_obj_set_style_text_color(s_air.uv, lv_color_hex(col), 0);
     }
 }
 
@@ -3072,51 +3093,51 @@ static const char *MOON_NAMES[8] = {
 // Refresh the sun-path corner times, the daylight length + live next-event
 // countdown, and the moon phase caption from the last sun poll + current time.
 static void update_sun_labels() {
-    if (s_srMin < 0 || s_ssMin < 0) return;
+    if (s_home.srMin < 0 || s_home.ssMin < 0) return;
     char sr[12], ss[12];
-    fmt_hm(s_srMin, sr, sizeof(sr));
-    fmt_hm(s_ssMin, ss, sizeof(ss));
+    fmt_hm(s_home.srMin, sr, sizeof(sr));
+    fmt_hm(s_home.ssMin, ss, sizeof(ss));
 
-    int dl = s_ssMin - s_srMin; if (dl < 0) dl += 1440;
+    int dl = s_home.ssMin - s_home.srMin; if (dl < 0) dl += 1440;
     int now = sky_now_min();
 
     // Corner times track the leg currently on the arc: sunrise (left) -> sunset
     // (right) by day, sunset (left) -> next sunrise (right) by night.
-    bool isDay = (now >= 0 && now >= s_srMin && now <= s_ssMin && s_ssMin > s_srMin);
-    if (s_sunRiseLbl) {
-        lv_label_set_text(s_sunRiseLbl, isDay ? sr : ss);
-        lv_obj_set_style_text_color(s_sunRiseLbl, lv_color_hex(isDay ? 0xffe0a8 : 0xffc09a), 0);
+    bool isDay = (now >= 0 && now >= s_home.srMin && now <= s_home.ssMin && s_home.ssMin > s_home.srMin);
+    if (s_home.sunRiseLbl) {
+        lv_label_set_text(s_home.sunRiseLbl, isDay ? sr : ss);
+        lv_obj_set_style_text_color(s_home.sunRiseLbl, lv_color_hex(isDay ? 0xffe0a8 : 0xffc09a), 0);
     }
-    if (s_sunSetLbl) {
-        lv_label_set_text(s_sunSetLbl, isDay ? ss : sr);
-        lv_obj_set_style_text_color(s_sunSetLbl, lv_color_hex(isDay ? 0xffc09a : 0xffe0a8), 0);
+    if (s_home.sunSetLbl) {
+        lv_label_set_text(s_home.sunSetLbl, isDay ? ss : sr);
+        lv_obj_set_style_text_color(s_home.sunSetLbl, lv_color_hex(isDay ? 0xffc09a : 0xffe0a8), 0);
     }
 
     char line[72];
     if (now >= 0) {
         const char *evt; int mins;
-        if      (now < s_srMin) { evt = "Sunrise in"; mins = s_srMin - now; }
-        else if (now < s_ssMin) { evt = "Sunset in";  mins = s_ssMin - now; }
-        else                    { evt = "Sunrise in"; mins = (s_srMin + 1440) - now; }
+        if      (now < s_home.srMin) { evt = "Sunrise in"; mins = s_home.srMin - now; }
+        else if (now < s_home.ssMin) { evt = "Sunset in";  mins = s_home.ssMin - now; }
+        else                    { evt = "Sunrise in"; mins = (s_home.srMin + 1440) - now; }
         snprintf(line, sizeof(line), "Daylight %dh %02dm   -   %s %dh %02dm",
                  dl / 60, dl % 60, evt, mins / 60, mins % 60);
     } else {
         snprintf(line, sizeof(line), "Daylight %dh %02dm", dl / 60, dl % 60);
     }
-    if (s_sunLabel) lv_label_set_text(s_sunLabel, line);
+    if (s_home.sunLabel) lv_label_set_text(s_home.sunLabel, line);
 
-    if (s_moonLabel) {
-        int idx = s_moonIdx; if (idx < 0 || idx > 7) idx = 0;
+    if (s_home.moonLabel) {
+        int idx = s_home.moonIdx; if (idx < 0 || idx > 7) idx = 0;
         char mb[64];
-        snprintf(mb, sizeof(mb), "Moon phase: %s   -   %d%% illuminated", MOON_NAMES[idx], s_moonPct);
-        lv_label_set_text(s_moonLabel, mb);
+        snprintf(mb, sizeof(mb), "Moon phase: %s   -   %d%% illuminated", MOON_NAMES[idx], s_home.moonPct);
+        lv_label_set_text(s_home.moonLabel, mb);
     }
 }
 
 void ui_sun_set(int sunriseMin, int sunsetMin, int moonIdx, int illumPct) {
     UiLock _lk;
-    s_srMin = sunriseMin; s_ssMin = sunsetMin;
-    s_moonIdx = moonIdx; s_moonPct = illumPct;
+    s_home.srMin = sunriseMin; s_home.ssMin = sunsetMin;
+    s_home.moonIdx = moonIdx; s_home.moonPct = illumPct;
     draw_sky(sky_now_min());
     update_sun_labels();
 }
@@ -3125,9 +3146,9 @@ void ui_hourly_set(HourCell *cells, int count) {
     UiLock _lk;
     if (count > UI_HOURLY_N) count = UI_HOURLY_N;
     for (int i = 0; i < UI_HOURLY_N; i++) {
-        if (!s_hrCell[i]) continue;
-        if (i >= count) { lv_obj_add_flag(s_hrCell[i], LV_OBJ_FLAG_HIDDEN); continue; }
-        lv_obj_clear_flag(s_hrCell[i], LV_OBJ_FLAG_HIDDEN);
+        if (!s_home.hrCell[i]) continue;
+        if (i >= count) { lv_obj_add_flag(s_home.hrCell[i], LV_OBJ_FLAG_HIDDEN); continue; }
+        lv_obj_clear_flag(s_home.hrCell[i], LV_OBJ_FLAG_HIDDEN);
 
         char h[8];
         int hr = cells[i].hour;
@@ -3136,25 +3157,25 @@ void ui_hourly_set(HourCell *cells, int count) {
             int h12 = hr % 12; if (h12 == 0) h12 = 12;
             snprintf(h, sizeof(h), "%d%c", h12, hr < 12 ? 'a' : 'p');
         }
-        lv_label_set_text(s_hrHour[i], h);
+        lv_label_set_text(s_home.hrHour[i], h);
 
         float f = cells[i].tempC * 9.0f / 5.0f + 32.0f;
         char t[8]; snprintf(t, sizeof(t), "%.0f", f);
-        lv_label_set_text(s_hrTemp[i], t);
+        lv_label_set_text(s_home.hrTemp[i], t);
 
         int pp = cells[i].precipPct;
         char p[8];
         if (pp > 0) snprintf(p, sizeof(p), "%d%%", pp);
         else p[0] = '\0';
-        lv_label_set_text(s_hrPrecip[i], p);
+        lv_label_set_text(s_home.hrPrecip[i], p);
 
-        if (s_hrRain[i]) {                              // precip-probability fill height
+        if (s_home.hrRain[i]) {                              // precip-probability fill height
             if (pp > 0) {
-                lv_coord_t maxh = lv_obj_get_height(s_hrCell[i]) - 6;
-                lv_obj_set_height(s_hrRain[i], (lv_coord_t)(maxh * pp / 100));
-                lv_obj_clear_flag(s_hrRain[i], LV_OBJ_FLAG_HIDDEN);
+                lv_coord_t maxh = lv_obj_get_height(s_home.hrCell[i]) - 6;
+                lv_obj_set_height(s_home.hrRain[i], (lv_coord_t)(maxh * pp / 100));
+                lv_obj_clear_flag(s_home.hrRain[i], LV_OBJ_FLAG_HIDDEN);
             } else {
-                lv_obj_add_flag(s_hrRain[i], LV_OBJ_FLAG_HIDDEN);
+                lv_obj_add_flag(s_home.hrRain[i], LV_OBJ_FLAG_HIDDEN);
             }
         }
     }
