@@ -4,6 +4,16 @@
 #pragma once
 #include <Arduino.h>
 
+// A single calendar feed: display name, .ics URL, event color (0xRRGGBB) and
+// whether it's currently shown on-device. The list lives in Settings below.
+#define MAX_CALENDARS 8
+struct CalSource {
+    String   name;
+    String   url;
+    uint32_t color;    // 0xRRGGBB event color
+    bool     visible;  // on-device show/hide (persisted)
+};
+
 struct Settings {
     // Wi-Fi
     String   wifiSsid;
@@ -16,7 +26,9 @@ struct Settings {
 
     // Feature config
     uint16_t radarRangeNm;     // Flights tab search radius (<= 250 NM)
-    String   icsUrl;           // Calendar .ics feed
+    String   icsUrl;           // Legacy single calendar feed (migrated into calendars[0])
+    CalSource calendars[MAX_CALENDARS];  // Color-coded calendar feeds
+    uint8_t  calCount;         // number of active entries in calendars[]
     String   tickers;          // comma-separated symbols, e.g. "BTC,ETH,MSFT"
     bool     useMetric;        // units: metric vs imperial
     bool     use24hClock;
@@ -53,6 +65,9 @@ void settings_save();
 void settings_set_ticker_tf(uint8_t idx);
 void settings_set_cal_view(uint8_t view);
 void settings_set_last_panel(uint8_t panel);
+
+// Toggle a calendar's on-device visibility and persist just the calendar list.
+void settings_set_cal_visible(uint8_t idx, bool on);
 
 // Access the live settings instance.
 Settings &settings();

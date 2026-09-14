@@ -387,6 +387,7 @@ static const int  CAL_MAX = 160;
 static const int  CAL_HORIZON_DAYS = 45;
 static bool       s_calHadGood = false;    // offline resilience: keep last-good on a transient fetch failure
 static String     s_lastCalUrl = "\x01";   // sentinel: forces the first fetch
+static uint8_t    s_curCalIdx  = 0;        // calendar index tagged onto events during a parse
 
 // Days-from-civil (Howard Hinnant) -> UTC epoch seconds for a Y/M/D H:M:S.
 static long ymd_to_epoch(int y, int mo, int d, int h, int mi, int s) {
@@ -514,6 +515,7 @@ static void cal_add(CalEvent *ev, int &n, long start, long end, bool allDay,
                     const String &title, const String &location, long lo, long hi) {
     if (start < lo || start > hi || n >= CAL_MAX) return;
     ev[n].start = start; ev[n].end = end; ev[n].allDay = allDay;
+    ev[n].calIdx = s_curCalIdx;
     ev[n].title = title; ev[n].location = location; n++;
 }
 
@@ -585,13 +587,14 @@ static void cal_expand(CalEvent *ev, int &n, const RawMaster &m, long lo, long h
     #undef CAL_END
 }
 
-static void poll_calendar() {
-    String url = settings().icsUrl; url.trim();
-    if (!url.length()) { s_calHadGood = false; ui_calendar_error("No calendar URL configured"); return; }
+// Fetch + parse one .ics feed, appending its events (tagged with calIdx) into
+// cand[]/nc within [lo,hi]. Returns true if fetched & parsed (even 0 events).
+static bool parse_one_calendar(const String &rawUrl, uint8_t calIdx,
+                               CalEvent *cand, int &nc, long lo, long hi) {
+    String url = rawUrl; url.trim();
+    if (!url.length()) return false;
     if (url.startsWith("webcal://")) url = "https://" + url.substring(9);
-
-    long now = time(nullptr);
-    if (now < 1600000000L) { ui_calendar_error("Waiting for clock sync..."); return; }
+    s_curCalIdx = calIdx;
 
     WiFiClientSecure client;
     client.setInsecure();
@@ -599,21 +602,14 @@ static void poll_calendar() {
     https.setTimeout(15000);
     https.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
     https.setUserAgent("Mozilla/5.0");
-    if (!https.begin(client, url)) {
-        // Transient network hiccup: keep the last-good events on screen (#1).
-        if (s_calHadGood) { Serial.println("[cal] connect failed - keeping last-good events"); return; }
-        ui_calendar_error("Calendar: connect failed"); return;
-    }
+    if (!https.begin(client, url)) { Serial.println("[cal] connect failed"); return false; }
     https.addHeader("Accept-Encoding", "identity");   // never gzip — we can't inflate
     const char *hdrKeys[] = {"Content-Encoding", "Content-Type", "Transfer-Encoding"};
     https.collectHeaders(hdrKeys, 3);
     int code = https.GET();
     if (code != HTTP_CODE_OK) {
         Serial.printf("[cal] HTTP %d  %.90s\n", code, url.c_str());
-        https.end();
-        if (s_calHadGood) { Serial.println("[cal] HTTP error - keeping last-good events"); return; }
-        char m[40]; snprintf(m, sizeof(m), "Calendar HTTP %d", code);
-        ui_calendar_error(m); return;
+        https.end(); return false;
     }
     Serial.printf("[cal] CT=%s  CE=%s  TE=%s  len=%d\n",
                   https.header("Content-Type").c_str(),
@@ -622,20 +618,14 @@ static void poll_calendar() {
                   https.getSize());
     { String ct = https.header("Content-Type"); ct.toLowerCase();
       if (ct.indexOf("html") >= 0) {
-          ui_calendar_error("URL is a web page, not an .ics feed - use the private iCal address");
-          https.end(); return;
+          Serial.println("[cal] got HTML, not an .ics feed");
+          https.end(); return false;
       } }
     WiFiClient *st = https.getStreamPtr();
     int  bodyLen  = https.getSize();                // -1 => chunked / unknown
     bool chunked  = (bodyLen < 0);
     long chunkRem = chunked ? 0 : bodyLen;          // bytes left in current chunk
     bool bodyDone = false;
-
-    // Off the stack: this array + a TLS handshake would blow the loop stack.
-    static CalEvent cand[CAL_MAX]; int nc = 0;
-    long off = (s_utcOffset == 0x7fffffff) ? 0 : s_utcOffset;
-    long lo = ((now + off) / 86400) * 86400 - off;   // start of today, local
-    long hi = now + (long)CAL_HORIZON_DAYS * 86400;
 
     uint32_t started = millis();
     size_t   totalBytes = 0;
@@ -796,9 +786,39 @@ static void poll_calendar() {
     }
     https.end();
     for (int i = 0; i < s_mastN; i++) cal_expand(cand, nc, s_mast[i], lo, hi);
-    Serial.printf("[cal] bytes=%u vevents=%d masters=%d suppress=%d in-window=%d now=%ld\n",
-                  (unsigned)totalBytes, vevents, s_mastN, s_suppN, nc, now);
+    Serial.printf("[cal] cal#%d bytes=%u vevents=%d masters=%d suppress=%d total=%d\n",
+                  calIdx, (unsigned)totalBytes, vevents, s_mastN, s_suppN, nc);
     Serial.printf("[cal] head: %s\n", preview.c_str());
+    return true;
+}
+
+// Poll every configured calendar (fetch-all; on-device visibility filters at
+// render time), merge into one sorted list, and hand off to the UI.
+static void poll_calendar() {
+    long now = time(nullptr);
+    if (now < 1600000000L) { ui_calendar_error("Waiting for clock sync..."); return; }
+
+    int nCal = settings().calCount, configured = 0;
+    for (int i = 0; i < nCal; i++) if (settings().calendars[i].url.length()) configured++;
+    if (configured == 0) { s_calHadGood = false; ui_calendar_error("No calendar URL configured"); return; }
+
+    long off = (s_utcOffset == 0x7fffffff) ? 0 : s_utcOffset;
+    long lo = ((now + off) / 86400) * 86400 - off;   // start of today, local
+    long hi = now + (long)CAL_HORIZON_DAYS * 86400;
+
+    ui_calendar_loading();   // multi-feed fetch is slow — spin until set/error
+
+    static CalEvent cand[CAL_MAX]; int nc = 0;
+    int okFeeds = 0;
+    for (int i = 0; i < nCal && nc < CAL_MAX; i++) {
+        if (!settings().calendars[i].url.length()) continue;
+        if (parse_one_calendar(settings().calendars[i].url, (uint8_t)i, cand, nc, lo, hi)) okFeeds++;
+    }
+
+    if (okFeeds == 0) {   // every feed failed this round -> keep last-good if any
+        if (s_calHadGood) { Serial.println("[cal] all feeds failed - keeping last-good events"); return; }
+        ui_calendar_error("Calendar: connect failed"); return;
+    }
 
     // Sort ascending by start time (small n, insertion sort).
     for (int i = 1; i < nc; i++) {
@@ -807,9 +827,10 @@ static void poll_calendar() {
         cand[j + 1] = key;
     }
     if (nc == 0) { ui_calendar_error("No upcoming events"); return; }
+    Serial.printf("[cal] feeds ok=%d events=%d now=%ld\n", okFeeds, nc, now);
     for (int i = 0; i < nc; i++) {
         time_t t = (time_t)cand[i].start; struct tm lt; localtime_r(&t, &lt);
-        Serial.printf("[cal] #%d %04d-%02d-%02d %02d:%02d ad=%d '%s'\n", i,
+        Serial.printf("[cal] #%d cal%d %04d-%02d-%02d %02d:%02d ad=%d '%s'\n", i, cand[i].calIdx,
                       lt.tm_year + 1900, lt.tm_mon + 1, lt.tm_mday, lt.tm_hour, lt.tm_min,
                       (int)cand[i].allDay, cand[i].title.c_str());
     }
@@ -892,18 +913,23 @@ static PagePoll s_poll[PAGE_COUNT] = {
 static Page s_lastActivePage = PAGE_COUNT;   // invalid -> first tick syncs Home
 
 // Calendar refetches on a slower (15 min) cadence, needs a synced clock, and
-// reacts to a changed .ics URL — extra gates the generic timer doesn't cover.
+// reacts to any change in the configured feed URLs — extra gates the generic
+// timer doesn't cover. Visibility toggles filter at render, so they don't refetch.
 static void poll_calendar_gate(PagePoll &pp) {
     if (time(nullptr) <= 1600000000L) return;   // wait for a synced clock
-    String calUrl = settings().icsUrl; calUrl.trim();
-    bool urlChanged = (calUrl != s_lastCalUrl);
-    if (!calUrl.length()) {
-        if (urlChanged) { s_lastCalUrl = calUrl; ui_calendar_error("No calendar URL configured"); }
+    String sig; int configured = 0;             // signature of all feed URLs
+    for (int i = 0; i < settings().calCount; i++) {
+        String u = settings().calendars[i].url; u.trim();
+        if (u.length()) { sig += u; sig += '\n'; configured++; }
+    }
+    bool changed = (sig != s_lastCalUrl);
+    if (!configured) {
+        if (changed) { s_lastCalUrl = sig; ui_calendar_error("No calendar URL configured"); }
         return;
     }
-    if (pp.lastMs == 0 || urlChanged ||
+    if (pp.lastMs == 0 || changed ||
         millis() - pp.lastMs >= 15UL * 60UL * 1000UL) {
-        s_lastCalUrl = calUrl;
+        s_lastCalUrl = sig;
         poll_calendar();
         pp.lastMs = millis();   // count the cadence from completion, not start
     }

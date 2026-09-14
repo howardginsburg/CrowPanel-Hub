@@ -156,6 +156,10 @@ static struct {                                       // heroIdx re-init in buil
     lv_obj_t *cardTitle;
     lv_obj_t *cardBody;
     int       heroIdx;      // event index shown by the hero (-1 = none)
+    lv_obj_t *cellDot[42][4]; // per-day calendar color dots (month view)
+    lv_obj_t *filterBtn;    // opens the calendar visibility filter
+    lv_obj_t *filterCard;   // filter modal
+    lv_obj_t *filterList;   // filter modal row container (rebuilt on open)
 } s_cal;
 static struct {
     lv_obj_t *status;   // air-quality source line
@@ -1441,6 +1445,9 @@ static void cal_fmt_dur(long sec, char *out, size_t n) {
     else                  snprintf(out, n, "%ld day%s", m / 1440, m / 1440 == 1 ? "" : "s");
 }
 
+static uint32_t cal_color(uint8_t idx);              // calIdx -> color / visibility helpers
+static bool     cal_visible(const CalEvent &e);
+
 static void cal_close_cb(lv_event_t *e) {
     if (s_cal.card) lv_obj_add_flag(s_cal.card, LV_OBJ_FLAG_HIDDEN);
 }
@@ -1500,9 +1507,14 @@ static void cal_show_detail(int idx) {
     }
 
     if (e.location.length())
-        snprintf(body + p, sizeof(body) - p, LV_SYMBOL_GPS " %s", e.location.c_str());
+        p += snprintf(body + p, sizeof(body) - p, LV_SYMBOL_GPS " %s", e.location.c_str());
+
+    if (settings().calCount > 1 && e.calIdx < settings().calCount &&
+        settings().calendars[e.calIdx].name.length())
+        p += snprintf(body + p, sizeof(body) - p, "\n%s", settings().calendars[e.calIdx].name.c_str());
 
     lv_label_set_text(s_cal.cardBody, body);
+    lv_obj_set_style_border_color(s_cal.card, lv_color_hex(cal_color(e.calIdx)), 0);
     lv_obj_clear_flag(s_cal.card, LV_OBJ_FLAG_HIDDEN);
     lv_obj_move_foreground(s_cal.card);
 }
@@ -1528,6 +1540,14 @@ static void cal_view_restyle() {
     }
 }
 
+// Calendar color + visibility helpers (calIdx -> settings().calendars[]).
+static uint32_t cal_color(uint8_t idx) {
+    return (idx < settings().calCount) ? settings().calendars[idx].color : 0x2d6cdf;
+}
+static bool cal_visible(const CalEvent &e) {
+    return (e.calIdx < settings().calCount) ? settings().calendars[e.calIdx].visible : true;
+}
+
 // Fill one visible list row from a cached event (weekday + date + time, plus title).
 static void cal_fill_row(int r, const CalEvent &e) {
     static const char *WD[7] = {"Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"};
@@ -1544,6 +1564,9 @@ static void cal_fill_row(int r, const CalEvent &e) {
                  h12, tm.tm_min, tm.tm_hour < 12 ? "AM" : "PM"); }
     lv_label_set_text(s_cal.when[r], when);
     lv_label_set_text(s_cal.title[r], e.title.length() ? e.title.c_str() : "(no title)");
+    lv_obj_set_style_border_color(s_cal.row[r], lv_color_hex(cal_color(e.calIdx)), 0);
+    lv_obj_set_style_border_side(s_cal.row[r], LV_BORDER_SIDE_LEFT, 0);
+    lv_obj_set_style_border_width(s_cal.row[r], 4, 0);
     lv_obj_clear_flag(s_cal.row[r], LV_OBJ_FLAG_HIDDEN);
 }
 
@@ -1609,16 +1632,33 @@ static void cal_render_month() {
         lv_obj_set_style_border_width(s_cal.cell[i], today ? 2 : 0, 0);
     }
 
-    int cnt[42]; for (int i = 0; i < 42; i++) cnt[i] = 0;
+    int cnt[42]; uint8_t dot[42][4]; int nd[42];
+    for (int i = 0; i < 42; i++) { cnt[i] = 0; nd[i] = 0; }
     for (int i = 0; i < s_cal.allCount; i++) {
+        if (!cal_visible(s_cal.all[i])) continue;
         time_t et = (time_t)s_cal.all[i].start; struct tm em; localtime_r(&et, &em);
         int es = serial(em);
-        for (int k = 0; k < 42; k++) if (cellSerial[k] == es) { cnt[k]++; break; }
+        for (int k = 0; k < 42; k++) if (cellSerial[k] == es) {
+            cnt[k]++;
+            uint8_t ci = s_cal.all[i].calIdx;
+            bool seen = false; for (int d = 0; d < nd[k]; d++) if (dot[k][d] == ci) { seen = true; break; }
+            if (!seen && nd[k] < 4) dot[k][nd[k]++] = ci;
+            break;
+        }
     }
     for (int k = 0; k < 42; k++) {
         if (cnt[k] > 0) { char b[8]; snprintf(b, sizeof(b), "%d", cnt[k]);
                           lv_label_set_text(s_cal.cellCnt[k], b); }
         else            lv_label_set_text(s_cal.cellCnt[k], "");
+        for (int d = 0; d < 4; d++) {
+            if (!s_cal.cellDot[k][d]) continue;
+            if (d < nd[k]) {
+                lv_obj_set_style_bg_color(s_cal.cellDot[k][d], lv_color_hex(cal_color(dot[k][d])), LV_PART_INDICATOR);
+                lv_obj_clear_flag(s_cal.cellDot[k][d], LV_OBJ_FLAG_HIDDEN);
+            } else {
+                lv_obj_add_flag(s_cal.cellDot[k][d], LV_OBJ_FLAG_HIDDEN);
+            }
+        }
     }
 }
 
@@ -1627,6 +1667,10 @@ static void cal_render_month() {
 static void cal_render() {
     if (!s_cal.list) return;
     cal_view_restyle();
+    if (s_cal.filterBtn) {   // filter only makes sense with more than one calendar
+        if (settings().calCount > 1) lv_obj_clear_flag(s_cal.filterBtn, LV_OBJ_FLAG_HIDDEN);
+        else                         lv_obj_add_flag(s_cal.filterBtn, LV_OBJ_FLAG_HIDDEN);
+    }
 
     bool isList  = (s_cal.view == CAL_LIST);
     bool isMonth = (s_cal.view == CAL_MONTH);
@@ -1666,6 +1710,7 @@ static void cal_render() {
 
     int row = 0;
     for (int i = 0; i < s_cal.allCount && row < UI_MAX_EVENTS; i++) {
+        if (!cal_visible(s_cal.all[i])) continue;
         if (!isList) { long s = (long)s_cal.all[i].start; if (s < lo || s >= hi) continue; }
         cal_fill_row(row, s_cal.all[i]);
         s_cal.rowMap[row] = i;
@@ -1675,8 +1720,9 @@ static void cal_render() {
         if (s_cal.row[r]) lv_obj_add_flag(s_cal.row[r], LV_OBJ_FLAG_HIDDEN);
 
     if (isList) {
+        int vis = 0; for (int i = 0; i < s_cal.allCount; i++) if (cal_visible(s_cal.all[i])) vis++;
         char st[48];
-        snprintf(st, sizeof(st), "%d upcoming event%s", s_cal.allCount, s_cal.allCount == 1 ? "" : "s");
+        snprintf(st, sizeof(st), "%d upcoming event%s", vis, vis == 1 ? "" : "s");
         if (s_cal.status) lv_label_set_text(s_cal.status, st);
         update_cal_hero();
     } else if (row == 0 && s_cal.periodLbl) {
@@ -1714,6 +1760,56 @@ static void cal_cell_cb(lv_event_t *e) {
     s_cal.anchor = s_cal.cellEpoch[idx];
     s_cal.view = CAL_DAY;
     cal_render();
+}
+
+static void cal_filter_close_cb(lv_event_t *e) {
+    if (s_cal.filterCard) lv_obj_add_flag(s_cal.filterCard, LV_OBJ_FLAG_HIDDEN);
+}
+
+static void cal_filter_toggle_cb(lv_event_t *e) {
+    int idx = (int)(intptr_t)lv_event_get_user_data(e);
+    lv_obj_t *cb = lv_event_get_target(e);
+    bool on = lv_obj_has_state(cb, LV_STATE_CHECKED);
+    settings_set_cal_visible((uint8_t)idx, on);   // persist to NVS
+    cal_render();                                 // instant re-filter, no refetch
+}
+
+// Rebuild the filter rows from current settings (calendars can change via the portal).
+static void cal_filter_populate() {
+    if (!s_cal.filterList) return;
+    lv_obj_clean(s_cal.filterList);
+    for (int i = 0; i < settings().calCount; i++) {
+        lv_obj_t *row = lv_obj_create(s_cal.filterList);
+        lv_obj_set_size(row, lv_pct(100), 34);
+        lv_obj_set_style_bg_opa(row, LV_OPA_TRANSP, 0);
+        lv_obj_set_style_border_width(row, 0, 0);
+        lv_obj_set_style_pad_all(row, 0, 0);
+        lv_obj_clear_flag(row, LV_OBJ_FLAG_SCROLLABLE);
+
+        lv_obj_t *sw = lv_bar_create(row);
+        lv_obj_set_size(sw, 16, 16);
+        lv_obj_align(sw, LV_ALIGN_LEFT_MID, 0, 0);
+        lv_obj_set_style_radius(sw, 3, LV_PART_MAIN);
+        lv_obj_set_style_radius(sw, 3, LV_PART_INDICATOR);
+        lv_obj_set_style_bg_opa(sw, LV_OPA_TRANSP, LV_PART_MAIN);
+        lv_bar_set_range(sw, 0, 1); lv_bar_set_value(sw, 1, LV_ANIM_OFF);
+        lv_obj_set_style_bg_color(sw, lv_color_hex(cal_color((uint8_t)i)), LV_PART_INDICATOR);
+
+        lv_obj_t *cb = lv_checkbox_create(row);
+        lv_checkbox_set_text(cb, settings().calendars[i].name.length()
+                                 ? settings().calendars[i].name.c_str() : "(unnamed)");
+        lv_obj_align(cb, LV_ALIGN_LEFT_MID, 26, 0);
+        lv_obj_set_style_text_font(cb, &lv_font_montserrat_14, 0);
+        if (settings().calendars[i].visible) lv_obj_add_state(cb, LV_STATE_CHECKED);
+        lv_obj_add_event_cb(cb, cal_filter_toggle_cb, LV_EVENT_VALUE_CHANGED, (void *)(intptr_t)i);
+    }
+}
+
+static void cal_filter_open_cb(lv_event_t *e) {
+    if (!s_cal.filterCard) return;
+    cal_filter_populate();
+    lv_obj_clear_flag(s_cal.filterCard, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_move_foreground(s_cal.filterCard);
 }
 
 static void build_calendar(lv_obj_t *pg) {
@@ -1836,7 +1932,7 @@ static void build_calendar(lv_obj_t *pg) {
         s_cal.row[i] = r;
 
         s_cal.when[i] = ui_make_label(r, "", UI_FONT_SM, UI_COL_ACCENT_CY);
-        lv_obj_align(s_cal.when[i], LV_ALIGN_LEFT_MID, 6, 0);
+        lv_obj_align(s_cal.when[i], LV_ALIGN_LEFT_MID, 12, 0);
 
         s_cal.title[i] = ui_make_label(r, "", UI_FONT_MD, UI_COL_TEXT);
         lv_label_set_long_mode(s_cal.title[i], LV_LABEL_LONG_DOT);
@@ -1891,6 +1987,19 @@ static void build_calendar(lv_obj_t *pg) {
             lv_obj_t *cnt = ui_make_label(cell, "", UI_FONT_SM, UI_COL_ACCENT_CY);
             lv_obj_align(cnt, LV_ALIGN_BOTTOM_RIGHT, -5, -3);
             s_cal.cellCnt[i] = cnt;
+
+            for (int d = 0; d < 4; d++) {          // per-calendar color dots (bottom-left)
+                lv_obj_t *dot = lv_bar_create(cell);
+                lv_obj_set_size(dot, 8, 8);
+                lv_obj_align(dot, LV_ALIGN_BOTTOM_LEFT, 5 + d * 11, -4);
+                lv_obj_set_style_radius(dot, 4, LV_PART_MAIN);
+                lv_obj_set_style_radius(dot, 4, LV_PART_INDICATOR);
+                lv_obj_set_style_bg_opa(dot, LV_OPA_TRANSP, LV_PART_MAIN);
+                lv_bar_set_range(dot, 0, 1);
+                lv_bar_set_value(dot, 1, LV_ANIM_OFF);
+                lv_obj_add_flag(dot, LV_OBJ_FLAG_HIDDEN);
+                s_cal.cellDot[i][d] = dot;
+            }
         }
         lv_obj_add_flag(s_cal.grid, LV_OBJ_FLAG_HIDDEN);
     }
@@ -1927,6 +2036,48 @@ static void build_calendar(lv_obj_t *pg) {
     lv_obj_center(cxL);
 
     lv_obj_add_flag(s_cal.card, LV_OBJ_FLAG_HIDDEN);
+
+    // Calendar visibility filter: floating button (bottom-right) + modal checklist.
+    s_cal.filterBtn = lv_btn_create(pg);
+    lv_obj_set_size(s_cal.filterBtn, 74, 30);
+    lv_obj_align(s_cal.filterBtn, LV_ALIGN_BOTTOM_RIGHT, 0, -2);
+    lv_obj_set_style_bg_color(s_cal.filterBtn, lv_color_hex(0x1c2740), 0);
+    lv_obj_set_style_radius(s_cal.filterBtn, 8, 0);
+    lv_obj_add_event_cb(s_cal.filterBtn, cal_filter_open_cb, LV_EVENT_CLICKED, nullptr);
+    { lv_obj_t *fbl = ui_make_label(s_cal.filterBtn, "Filter", UI_FONT_SM, UI_COL_TEXT);
+      lv_obj_center(fbl); }
+    lv_obj_add_flag(s_cal.filterBtn, LV_OBJ_FLAG_HIDDEN);   // shown by cal_render when >1 calendar
+
+    s_cal.filterCard = lv_obj_create(pg);
+    lv_obj_set_size(s_cal.filterCard, 320, 260);
+    lv_obj_align(s_cal.filterCard, LV_ALIGN_CENTER, 0, -6);
+    lv_obj_set_style_bg_color(s_cal.filterCard, lv_color_hex(UI_COL_CARD_BG), 0);
+    lv_obj_set_style_border_color(s_cal.filterCard, lv_color_hex(UI_COL_ACCENT), 0);
+    lv_obj_set_style_border_width(s_cal.filterCard, 2, 0);
+    lv_obj_set_style_radius(s_cal.filterCard, 12, 0);
+    lv_obj_set_style_pad_all(s_cal.filterCard, 14, 0);
+    lv_obj_clear_flag(s_cal.filterCard, LV_OBJ_FLAG_SCROLLABLE);
+
+    { lv_obj_t *ft = ui_make_label(s_cal.filterCard, "Show calendars", UI_FONT_LG, UI_COL_WHITE);
+      lv_obj_align(ft, LV_ALIGN_TOP_LEFT, 0, 0); }
+
+    { lv_obj_t *fx = lv_btn_create(s_cal.filterCard);
+      lv_obj_set_size(fx, 26, 26);
+      lv_obj_align(fx, LV_ALIGN_TOP_RIGHT, 4, -4);
+      lv_obj_set_style_bg_color(fx, lv_color_hex(0x2f80ed), 0);
+      lv_obj_add_event_cb(fx, cal_filter_close_cb, LV_EVENT_CLICKED, nullptr);
+      lv_obj_t *fxL = lv_label_create(fx); lv_label_set_text(fxL, LV_SYMBOL_CLOSE); lv_obj_center(fxL); }
+
+    s_cal.filterList = lv_obj_create(s_cal.filterCard);
+    lv_obj_set_size(s_cal.filterList, 288, 190);
+    lv_obj_align(s_cal.filterList, LV_ALIGN_TOP_LEFT, 0, 40);
+    lv_obj_set_style_bg_opa(s_cal.filterList, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(s_cal.filterList, 0, 0);
+    lv_obj_set_style_pad_all(s_cal.filterList, 0, 0);
+    lv_obj_set_flex_flow(s_cal.filterList, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_scroll_dir(s_cal.filterList, LV_DIR_VER);
+
+    lv_obj_add_flag(s_cal.filterCard, LV_OBJ_FLAG_HIDDEN);
 
     cal_render();                                   // apply the restored view + layout
 }
@@ -2335,6 +2486,7 @@ static void update_cal_hero() {
     // First event that hasn't started yet (list is sorted ascending; allow a 60s grace).
     int idx = -1;
     for (int i = 0; i < s_cal.allCount; i++) {
+        if (!cal_visible(s_cal.all[i])) continue;
         if ((long)s_cal.all[i].start > (long)now - 60) { idx = i; break; }
     }
     if (idx < 0) { lv_obj_add_flag(s_cal.hero, LV_OBJ_FLAG_HIDDEN); return; }
@@ -3041,6 +3193,11 @@ void ui_tickers_error(const String &msg) {
     UiLock _lk;
     page_set_loading(PAGE_TICKERS, false);
     if (s_tk.status) lv_label_set_text(s_tk.status, msg.c_str());
+}
+
+void ui_calendar_loading() {
+    UiLock _lk;
+    page_set_loading(PAGE_CALENDAR, true);
 }
 
 void ui_calendar_set(CalEvent *events, int count) {

@@ -30,6 +30,12 @@ static const char CONFIG_PAGE[] PROGMEM = R"HTML(<!DOCTYPE html>
   button { margin-top:20px; width:100%; padding:13px; border:0; border-radius:9px;
     background:#2f7bff; color:#fff; font-size:16px; font-weight:600; cursor:pointer; }
   button.secondary { background:#2c3856; }
+  .cal { display:flex; gap:8px; align-items:center; margin-top:8px; }
+  .cal input.cname { flex:0 0 120px; }
+  .cal input.curl { flex:1; }
+  .cal input[type=color] { flex:0 0 44px; padding:2px; height:40px; }
+  .cal button.calDel { flex:0 0 36px; margin-top:0; padding:9px 0; background:#5a2140; font-size:15px; }
+  #calAdd { margin-top:10px; }
   #status { margin-top:14px; font-size:14px; min-height:18px; }
   .ok { color:#5ce08a; } .err { color:#ff7676; }
   small { color:#8b97b0; }
@@ -71,8 +77,9 @@ static const char CONFIG_PAGE[] PROGMEM = R"HTML(<!DOCTYPE html>
       <legend>Dashboard</legend>
       <label>Flights radar range (NM, max 250)</label>
       <input id="radarRangeNm" type="number" min="5" max="250">
-      <label>Calendar .ics feed URL</label>
-      <input id="icsUrl" placeholder="https://...">
+      <label>Calendars <small>(name, .ics URL, color; up to 8)</small></label>
+      <div id="cals"></div>
+      <button type="button" class="secondary" id="calAdd" onclick="calAddRow()">+ Add calendar</button>
       <label>Tickers (comma separated)</label>
       <input id="tickers" placeholder="MSFT,AAPL,NVDA">
       <label>Refresh interval (seconds)</label>
@@ -127,8 +134,31 @@ async function load() {
   controls().forEach(el => {
     if (!(el.id in c) || c[el.id] == null) return;
     if (el.type === 'checkbox') el.checked = !!c[el.id];
+    // Floats (lat/lon) round-trip with extra digits; snap to the input's step
+    // precision so the value stays a valid multiple of step="0.0001".
+    else if (el.type === 'number' && el.step && el.step.includes('.'))
+      el.value = Number(c[el.id]).toFixed(el.step.split('.')[1].length);
     else el.value = c[el.id];
   });
+  $('cals').innerHTML = '';
+  (c.calendars || []).forEach(cal => calAddRow(cal.name || '', cal.url || '', cal.color || '#2d6cdf'));
+}
+
+// One editable calendar row (name, .ics URL, color, remove). No ids on the
+// inner inputs, so the auto-discovery in controls() skips them; the submit
+// handler collects them explicitly into body.calendars.
+function calAddRow(name = '', url = '', color = '#2d6cdf') {
+  const wrap = $('cals');
+  if (wrap.children.length >= 8) {
+    $('status').textContent = 'Up to 8 calendars.'; $('status').className = 'err'; return;
+  }
+  const row = document.createElement('div'); row.className = 'cal';
+  const n = document.createElement('input'); n.type = 'text'; n.className = 'cname'; n.placeholder = 'Name'; n.value = name;
+  const u = document.createElement('input'); u.type = 'text'; u.className = 'curl'; u.placeholder = 'https://...ics'; u.value = url;
+  const k = document.createElement('input'); k.type = 'color'; k.value = /^#[0-9a-fA-F]{6}$/.test(color) ? color : '#2d6cdf';
+  const b = document.createElement('button'); b.type = 'button'; b.className = 'calDel'; b.textContent = 'X';
+  b.onclick = () => row.remove();
+  row.append(n, u, k, b); wrap.append(row);
 }
 async function scan() {
   $('status').textContent = 'Scanning...';
@@ -185,6 +215,10 @@ $('f').addEventListener('submit', async e => {
     else body[el.id] = el.value;
   });
   if (!body.wifiPass) delete body.wifiPass;   // blank keeps the stored password
+  body.calendars = [...$('cals').children].map(row => {
+    const i = row.querySelectorAll('input');
+    return { name: i[0].value.trim(), url: i[1].value.trim(), color: i[2].value };
+  }).filter(x => x.url);                       // drop blank rows (no URL)
   const st = $('status'); st.textContent = 'Saving...'; st.className = '';
   try {
     const r = await fetch('/api/config', { method:'POST',

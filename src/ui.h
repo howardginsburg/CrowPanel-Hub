@@ -69,9 +69,10 @@ void ui_tickers_error(const String &msg);
 int  ui_ticker_tf_index();
 
 #define UI_MAX_EVENTS 24
-struct CalEvent { long start; long end; bool allDay; String title; String location; };
+struct CalEvent { long start; long end; bool allDay; uint8_t calIdx; String title; String location; };
 void ui_calendar_set(CalEvent *events, int count);
 void ui_calendar_error(const String &msg);
+void ui_calendar_loading();   // show the spinner while a (re)fetch is in flight
 
 // ---- Air quality (Open-Meteo US AQI + UV) ----
 void ui_air_set(int usAqi, float pm25, float pm10, float o3, float no2);
