@@ -104,7 +104,9 @@ static void panel_init() {
     cfg.num_fbs               = 2;               // double framebuffer in PSRAM
     cfg.bounce_buffer_size_px = LCD_WIDTH * 10;  // prefetch 10 lines into internal SRAM so the panel
                                                  // FIFO never starves on PSRAM latency -- this is what
-                                                 // eliminates the constant pclk-independent shimmer
+                                                 // eliminates the constant pclk-independent shimmer.
+                                                 // (Do NOT enlarge: bigger bounce buffers steal the
+                                                 // internal DMA SRAM that mbedTLS/HTTPS needs -> fetches fail.)
     cfg.dma_burst_size        = 64;              // factory DMA burst length
 
     cfg.hsync_gpio_num = LCD_HSYNC;
