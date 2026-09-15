@@ -3,9 +3,11 @@
 A wall/desk information dashboard running on the **Elecrow CrowPanel ESP32 HMI 5.0"**
 (module **DIS07050H**): an 800×480 parallel-RGB touchscreen driven by an ESP32-S3, built
 with **PlatformIO + LVGL 8.3**. It shows eight tabs — Home (clock + weather + sun/moon +
-hourly), Flights (live ADS-B radar), Calendar (iCal), Tickers (stock/crypto sparklines),
-Air (US AQI + UV), Photo (auto-rotating nature photo frame), Diag (device stats), and
-Config (Wi-Fi setup QR + web portal).
+hourly), Flights (live ADS-B radar), Calendar (color-coded iCal feeds), Tickers
+(stock/crypto sparklines), Air (US AQI + UV), Photo (auto-rotating nature photo frame),
+Diag (device stats), and Config (Wi-Fi setup QR + web portal). A pop-up banner surfaces US
+severe-weather alerts (NWS), and the whole UI is re-skinnable via four selectable color
+themes applied at boot.
 
 This document is the complete technical reference — hardware wiring, the display driver,
 module design, data flow, and build details. The [README](README.md) is the high-level
@@ -22,7 +24,10 @@ overview of the board and what the dashboard does.
   the display in a fixed order every ~5 ms. Any blocking call (a slow TLS handshake, a
   heavy canvas render) stalls *everything*, so blocking is actively bounded (see §7).
 - **Data is pull-per-tab.** The data layer polls only the data source behind the
-  currently-visible tab, syncing immediately on focus change (see §6).
+  currently-visible tab, syncing immediately on focus change (see §6). Severe-weather
+  alerts are the one exception — they poll independently so a warning can pop over any tab.
+- **The UI is re-skinnable at boot.** All chrome colors resolve through one runtime
+  palette (`g_theme`); the selected theme is copied in before the UI is built (see §5.2).
 - **The display is the hard part.** A streamed RGB panel with no frame RAM is kept
   glitch-free by an `esp_lcd` bounce buffer and a VSYNC-synchronised buffer swap (see §5.1).
 
@@ -94,6 +99,7 @@ I²C addresses: GT911 `0x5D` (alt `0x14`), PCA9557 `0x18`.
 | Preferences (NVS) | settings storage | Survives reboot and re-flash |
 | QRCode | on-screen QR | Config tab link to the web UI |
 | JPEGDEC | photo-frame decode | Decodes downloaded JPEGs to RGB565 in PSRAM ([src/photo.cpp](src/photo.cpp)) |
+| Runtime palette | selectable themes | One `g_theme` struct + `UI_COL_*` tokens; applied at boot ([src/ui_theme.cpp](src/ui_theme.cpp)) |
 
 **Key `platformio.ini` settings:** `board_build.arduino.memory_type = qio_opi` (Octal
 PSRAM), `board_build.partitions = huge_app.csv` (3 MB app on 4 MB flash),
@@ -129,7 +135,8 @@ graph TD
     end
 
     subgraph APP[Application]
-        ui[ui.cpp<br/>sidebar + 7 pages]
+        ui[ui.cpp<br/>sidebar + 8 pages]
+        theme[ui_theme.cpp<br/>runtime palette]
         data[data.cpp<br/>per-tab pollers]
     end
 
@@ -143,7 +150,7 @@ graph TD
     main --> disp & touch & ui & net & web & data & cfg
     disp --> pins & touch & lvconf
     touch --> pins
-    ui --> cfg & net
+    ui --> cfg & net & theme
     data --> ui & net & cfg
     net --> cfg
     web --> cfg & net & page
@@ -151,7 +158,8 @@ graph TD
 ```
 
 **Data providers** (all keyless HTTPS): Open-Meteo (weather, air, UV, sun), adsb.fi
-(flights), Yahoo Finance chart API (tickers), and any user-supplied iCal `.ics` URL.
+(flights), Yahoo Finance chart API (tickers), the US NWS (severe-weather alerts), and any
+user-supplied iCal `.ics` feeds.
 
 ---
 
@@ -165,7 +173,8 @@ ever loaded.
 flowchart TD
     A[Serial.begin 115200] --> B[net_check_factory_reset<br/>BOOT held? wipe Wi-Fi creds]
     B --> C[settings_load<br/>read NVS, apply defaults]
-    C --> E[touch_init<br/>I2C + GT911]
+    C --> D[ui_theme_apply<br/>copy selected theme into g_theme]
+    D --> E[touch_init<br/>I2C + GT911]
     E --> F[display_init<br/>esp_lcd panel + LVGL buffers]
     F --> G[display_set_brightness<br/>from settings]
     G --> H[ui_init<br/>build sidebar + all pages]
@@ -269,6 +278,25 @@ while (s_vsync_count == count) { if (timed_out) break; taskYIELD(); }
 reuse the 5.0" values. Keep the bounce buffer; it is board-independent and is what makes
 any raw-RGB panel stable.
 
+### 5.2 Theming — one runtime palette
+
+Every recurring chrome color is a **`UI_COL_*` macro over a single runtime struct**
+`g_theme` ([src/ui_theme.h](src/ui_theme.h)), so call sites stay `lv_color_hex(UI_COL_*)`
+and the whole UI re-skins by swapping one struct. `ui_theme_apply(settings().theme)` copies
+the chosen entry from `kThemes[]` into `g_theme` **once at boot, before `ui_init()` builds
+the pages** ([src/ui_theme.cpp](src/ui_theme.cpp)). Because the palette is fixed for the
+life of a boot, page builders can branch on it directly (e.g. a `theme_is_light()`
+luminance test) with no need to rebuild widgets when it changes — **changing the theme in
+the web portal takes effect on the next reboot.**
+
+Four themes ship: two dark (**Midnight** — the original scheme — and **Graphite**) and two
+light (**Daylight**, cool; **Parchment**, warm cream). Each is a 17-color `UiPalette`
+(surfaces, text, accents, plus `onAccent` for text over a saturated fill). Genuinely
+one-off decorative colors (radar sweep, plane trails, sun glow, per-metric spark colors)
+stay as literals at their single use site rather than bloating the palette. A handful of
+status colors (AQI/UV bands, the calendar "today" cell) are darkened at runtime on light
+themes so they stay legible on a bright surface.
+
 ---
 
 ## 6. The page/data model
@@ -307,7 +335,9 @@ static PagePoll s_poll[PAGE_COUNT] = { {poll_weather,0}, {poll_flights,0}, ... }
 Cadence is `settings().pollSeconds` (default 60 s), except **Flights is capped at 10 s**
 for a live radar, **Photo** uses its own `settings().photoSeconds` rotate interval (default
 60 s, min 10 s), and **Calendar** uses its own 15-minute gate (`poll_calendar_gate`) that
-also reacts to a changed `.ics` URL. `DIAG`/`CONFIG` have no poller.
+also reacts to a changed feed list. `DIAG`/`CONFIG` have no poller. **Severe-weather
+alerts** sit outside this table entirely: `data_tick()` polls the NWS every 120 s
+regardless of the focused tab (when enabled), so a warning can pop over any page.
 
 ```mermaid
 sequenceDiagram
@@ -335,10 +365,11 @@ sequenceDiagram
 The data layer never touches LVGL objects directly; it calls typed **push hooks** declared
 in [src/ui.h](src/ui.h), e.g. `ui_weather_set()`, `ui_forecast_set(DayForecast*)`,
 `ui_flights_set(FlightRow*)`, `ui_tickers_set(TickerRow*)`, `ui_calendar_set(CalEvent*)`,
-`ui_air_set()`, `ui_air_uv_set()`, `ui_sun_set()`, `ui_hourly_set(HourCell*)`, and
-`ui_photo_refresh(ok, status)`, plus an `ui_*_error()` for each. This keeps parsing
-(data.cpp) and rendering (ui.cpp) decoupled and gives each feed a small, explicit contract
-(the row/cell structs).
+`ui_air_set()`, `ui_air_uv_set()`, `ui_sun_set()`, `ui_hourly_set(HourCell*)`,
+`ui_photo_refresh(ok, status)`, and `ui_alert_set()` / `ui_alert_clear()` for the
+severe-weather banner, plus an `ui_*_error()` for each. This keeps parsing (data.cpp) and
+rendering (ui.cpp) decoupled and gives each feed a small, explicit contract (the row/cell
+structs).
 
 ### 6.4 Data sources & APIs
 
@@ -349,7 +380,8 @@ All feeds are **keyless** and fetched over HTTPS (`WiFiClientSecure::setInsecure
 | Weather, air, UV, sun | Open-Meteo (`api.open-meteo.com`, `air-quality-api`, geocoding) | No key, no attribution required |
 | Flights | adsb.fi (`opendata.adsb.fi/api/v3/lat/{lat}/lon/{lon}/dist/{NM}`, ≤ 250 NM) | **Credit required**, non-commercial, ~1 req/sec |
 | Tickers | Yahoo Finance chart API (`query1.finance.yahoo.com/v8/finance/chart/{sym}`) | Needs a `User-Agent` header or it 403s |
-| Calendar | user-supplied public `.ics` URL | Streamed, not buffered into JSON |
+| Alerts | US NWS (`api.weather.gov/alerts/active?point={lat},{lon}`) | US-only, keyless; **requires a descriptive `User-Agent`** or it 403s. Polled every 120 s independently of the focused tab |
+| Calendar | one or more user-supplied public `.ics` URLs (up to 8, color-coded) | Streamed, not buffered into JSON |
 | Photo | LoremFlickr (`loremflickr.com/800/436/nature`) or any user-supplied JPEG URL | Follows redirects; binary JPEG, decoded with JPEGDEC |
 
 adsb.fi fields used: `r` (registration / tail #, falls back to the `flight` callsign), `t`
@@ -395,7 +427,10 @@ that need it. The GT911 self-initialises at power-on, so this module only reads 
 Builds the sidebar nav and all pages (`build_home`, `build_flights`, …, `build_photo`),
 exposes `ui_show_page()` / `ui_active_page()`, runs `ui_tick()` housekeeping (clock text,
 live Diag/Config values, net-state page switching), and implements every `ui_*_set()` push
-hook.
+hook — including `ui_alert_set()` / `ui_alert_clear()`, which raise and dismiss the
+full-width severe-weather banner. All chrome colors come from the `UI_COL_*` palette tokens
+(§5.2); a `theme_is_light()` luminance check lets individual builders adapt fills that
+would otherwise wash out on a light theme..
 
 - **Flights radar** is drawn on a 400×400 PSRAM canvas. Range rings are plotted point-by-
   point via the `canvas_ring()` helper using `lv_canvas_set_px_color`. **`lv_canvas_draw_arc`
@@ -404,6 +439,13 @@ hook.
   framebuffer that `photo.cpp` decodes into; `ui_photo_refresh()` invalidates the canvas or
   shows the status/error text.
 - The Config-tab QR code and ticker sparklines are also LVGL canvases.
+
+### `ui_theme.cpp` / `ui_theme.h` — runtime palette & themes
+Defines the `UiPalette` struct, the four `kThemes[]` entries (Midnight / Graphite /
+Daylight / Parchment) and their names, and the live `g_theme` instance the `UI_COL_*`
+macros resolve against. `ui_theme_apply(id)` copies the chosen theme into `g_theme` at boot
+before the UI is built (§5.2). Header-only for callers: including `ui_theme.h` gives every
+module the color/font tokens.
 
 ### `photo.cpp` / `photo.h` — network photo frame
 Downloads a JPEG over HTTPS into a 512 KB PSRAM scratch buffer, then decodes it with
@@ -418,8 +460,11 @@ NTP time plus all HTTPS JSON polling behind the per-tab descriptor table (§6.2)
 
 - **`http_get_json()`** — the shared TLS/HTTP helper (`setInsecure`, an **8-second
   handshake timeout**, 8 s connect/read timeouts, GET, error handling) used by weather,
-  air, flights, and tickers. `poll_calendar()` streams its (potentially multi-MB) `.ics`
-  body manually instead of buffering JSON.
+  air, flights, tickers, and alerts. `poll_calendar()` streams its (potentially multi-MB)
+  `.ics` bodies manually instead of buffering JSON.
+- **Alerts:** `poll_alerts()` queries the US NWS every 120 s (independent of the focused
+  tab, §6.2), filters by `alertMinSeverity`, de-dupes on the NWS alert id so an
+  acknowledged banner won't re-pop, and drives `ui_alert_set()` / `ui_alert_clear()`.
 - **Time:** `data_begin_time()` seeds the clock in UTC; `apply_utc_offset()` re-applies the
   local offset on each successful weather poll (this coupling is a known limitation, §9).
 - **Parsers/structs:** `FlightRow`, `TickerRow` (+`spark[SPARK_N]`), `CalEvent`,
@@ -459,10 +504,16 @@ BGR888, and streams a 54-byte-header 800×480 24-bit BMP (bottom-up) from a reus
 buffer. This is how the screenshots in [README](README.md) and `media/` were captured.
 
 ### `settings.cpp` / `settings.h` — persistent config
-The `Settings` struct (16 fields) is the single source of truth. `settings_load()` /
-`settings_save()` map each field to an NVS key via the `Preferences` library (keys are
-abbreviated, e.g. `useMetric`→`"metric"`, `use24hClock`→`"clk24"`, `photoSeconds`→`"photoSec"`),
-and JSON import/export back the portal's config API. `settings()` returns the live instance.
+The `Settings` struct is the single source of truth for every user-configurable value —
+Wi-Fi, location, the color-coded calendar list (`CalSource[8]`), tickers, units, photo
+frame, severe-weather-alert thresholds, brightness/poll cadence, the selected `theme`, an
+optional config PIN, and a few on-device view-state fields (last ticker timeframe, calendar
+view, last panel). `settings_load()` / `settings_save()` map each field to an NVS key via
+the `Preferences` library (abbreviated keys, e.g. `useMetric`→`"metric"`,
+`use24hClock`→`"clk24"`, `photoSeconds`→`"photoSec"`); lightweight helpers
+(`settings_set_cal_view()`, `settings_set_ticker_tf()`, `settings_set_last_panel()`,
+`settings_set_cal_visible()`) persist a single view preference without a full save. JSON
+import/export backs the portal's config API. `settings()` returns the live instance.
 
 ### `lv_conf.h` — LVGL build configuration
 Compile-time LVGL options (enabled fonts, color depth RGB565, feature flags) for this
@@ -480,6 +531,8 @@ panel.
 | **Stamp `lastMs` *after* the poll** | Stamping before a slow poll re-triggers it every tick → re-poll storm / permanent freeze. |
 | **`canvas_ring()` instead of `lv_canvas_draw_arc`** | LVGL 8.3 full-circle arcs hang at larger radii; the point-plotted ring is bounded and cheap. |
 | **Per-tab polling** | Avoids fetching (and rendering) data for hidden tabs; syncs instantly on focus. |
+| **Alerts poll off the per-tab table** | A severe-weather warning must be able to pop over any tab, so it runs on its own 120 s timer. |
+| **Theme copied into `g_theme` at boot** | Palette is fixed per boot, so builders can branch on `theme_is_light()` cheaply; a theme change applies on the next reboot. |
 | **Single cooperative loop** | Simple and deterministic, but means *no* step may block — hence the timeouts and bounded renders above. |
 | **16 KB loop stack** | mbedTLS handshakes overlapping a calendar fetch overflow the default 8 KB stack. |
 | **No vendored libraries** | Stay on published LVGL / Arduino-ESP32; write only minimal glue (e.g. the VSYNC swap). |
@@ -503,7 +556,8 @@ panel.
 | [src/board_pins.h](src/board_pins.h) | Pins, RGB timing, I²C addresses |
 | [src/display.cpp](src/display.cpp) / [.h](src/display.h) | esp_lcd RGB panel + LVGL + tear-free flush |
 | [src/touch_gt911.cpp](src/touch_gt911.cpp) / [.h](src/touch_gt911.h) | GT911 reader + PCA9557 reset |
-| [src/ui.cpp](src/ui.cpp) / [.h](src/ui.h) | Sidebar nav, pages, push hooks, radar canvas |
+| [src/ui.cpp](src/ui.cpp) / [.h](src/ui.h) | Sidebar nav, pages, push hooks, radar canvas, alert banner |
+| [src/ui_theme.cpp](src/ui_theme.cpp) / [.h](src/ui_theme.h) | Runtime palette + selectable color themes |
 | [src/photo.cpp](src/photo.cpp) / [.h](src/photo.h) | Photo frame: HTTPS JPEG download + JPEGDEC decode |
 | [src/data.cpp](src/data.cpp) / [.h](src/data.h) | NTP, per-tab HTTPS pollers, parsers |
 | [src/net_wifi.cpp](src/net_wifi.cpp) / [.h](src/net_wifi.h) | Wi-Fi state machine + provisioning |

@@ -108,6 +108,13 @@ static const char CONFIG_PAGE[] PROGMEM = R"HTML(<!DOCTYPE html>
 
     <fieldset>
       <legend>Device</legend>
+      <label>Theme</label>
+      <select id="theme">
+        <option value="0">Midnight (dark)</option>
+        <option value="1">Graphite (dark)</option>
+        <option value="2">Daylight (light)</option>
+        <option value="3">Parchment (light)</option>
+      </select>
       <label>Brightness (0&ndash;255)</label>
       <input id="brightness" type="number" min="10" max="255">
       <label>Config PIN <small>(optional; blank = no PIN)</small></label>

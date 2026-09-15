@@ -8,6 +8,7 @@
 #include "net_wifi.h"
 #include "web_portal.h"
 #include "data.h"
+#include "ui_theme.h"
 
 // The default 8 KB loop stack overflows when poll_calendar()'s frame overlaps a
 // TLS handshake (mbedtls is stack-hungry); give loopTask room.
@@ -22,6 +23,7 @@ void setup() {
     net_check_factory_reset();
 
     settings_load();
+    ui_theme_apply(settings().theme);   // pick the palette before any UI is built
 
     touch_init();
     display_init();

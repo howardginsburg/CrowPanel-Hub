@@ -1,34 +1,59 @@
 #pragma once
 // Central UI palette + font tokens. Single source of truth for colors/fonts used
-// across ui.cpp. Values are raw RGB; wrap at the call site: lv_color_hex(UI_COL_*).
-// Only tokens that recur are named here; genuinely one-off decorative accents
-// (sun glow, radar sweep, plane trails, per-metric spark colors) stay as literals
-// at their single use site on purpose.
+// across ui.cpp. The UI_COL_* tokens are macros over one runtime palette (g_theme)
+// so the whole UI can be re-skinned by swapping a struct at boot; call sites are
+// unchanged (still lv_color_hex(UI_COL_*)). Only tokens that recur are named here;
+// genuinely one-off decorative accents (sun glow, radar sweep, plane trails, sky
+// scene, per-metric spark colors) stay as literals at their single use site.
 
 #include <cstdint>
 #include "lvgl.h"
 
+// Live palette. 16 chrome colors + onAccent (text over a saturated accent/alert
+// fill). Chosen from kThemes[] by ui_theme_apply() before the UI is built.
+struct UiPalette {
+    uint32_t pageBg, cardBg, surface, trackBg;                       // surfaces
+    uint32_t text, textSec, textDim, textMute, white, onAccent;      // text
+    uint32_t btnBg, accent, accent2, accentLt, accentCy, good, warn; // accents
+};
+extern UiPalette g_theme;
+
 // --- Surfaces / backgrounds ---------------------------------------------------
-constexpr uint32_t UI_COL_PAGE_BG   = 0x0f1420;   // page background
-constexpr uint32_t UI_COL_CARD_BG   = 0x141c2e;   // card / tile / row background
-constexpr uint32_t UI_COL_SURFACE   = 0x161d2e;   // topbar + home tile surface
-constexpr uint32_t UI_COL_TRACK_BG  = 0x2a3550;   // bar / gauge track background
+#define UI_COL_PAGE_BG   (g_theme.pageBg)    // page background
+#define UI_COL_CARD_BG   (g_theme.cardBg)    // card / tile / row background
+#define UI_COL_SURFACE   (g_theme.surface)   // topbar + home tile surface
+#define UI_COL_TRACK_BG  (g_theme.trackBg)   // bar / gauge track background
 
 // --- Text ---------------------------------------------------------------------
-constexpr uint32_t UI_COL_TEXT      = 0xe6ebf5;   // primary text
-constexpr uint32_t UI_COL_TEXT_SEC  = 0xcdd6ea;   // secondary body text
-constexpr uint32_t UI_COL_TEXT_DIM  = 0x9fb0cc;   // dim label text
-constexpr uint32_t UI_COL_TEXT_MUTE = 0x8b97b0;   // muted / caption text
-constexpr uint32_t UI_COL_WHITE     = 0xffffff;   // pure white emphasis
+#define UI_COL_TEXT      (g_theme.text)      // primary text
+#define UI_COL_TEXT_SEC  (g_theme.textSec)   // secondary body text
+#define UI_COL_TEXT_DIM  (g_theme.textDim)   // dim label text
+#define UI_COL_TEXT_MUTE (g_theme.textMute)  // muted / caption text
+#define UI_COL_WHITE     (g_theme.white)     // high-emphasis text on a themed surface
+#define UI_COL_ON_ACCENT (g_theme.onAccent)  // text on a saturated accent/alert fill (stays light)
 
 // --- Accents ------------------------------------------------------------------
-constexpr uint32_t UI_COL_BTN_BG    = 0x24406a;   // dark-blue button / radar ring
-constexpr uint32_t UI_COL_ACCENT    = 0x2f80ed;   // primary blue accent (calendar)
-constexpr uint32_t UI_COL_ACCENT2   = 0x2f7bff;   // secondary blue accent (flights)
-constexpr uint32_t UI_COL_ACCENT_LT = 0x7fb0ff;   // light-blue accent / outline
-constexpr uint32_t UI_COL_ACCENT_CY = 0x7fd1ff;   // cyan accent (tags / links)
-constexpr uint32_t UI_COL_GOOD      = 0x39d98a;   // green (good / distance)
-constexpr uint32_t UI_COL_WARN      = 0xffb454;   // amber (warning / stale)
+#define UI_COL_BTN_BG    (g_theme.btnBg)     // dark-blue button / radar ring
+#define UI_COL_ACCENT    (g_theme.accent)    // primary blue accent (calendar)
+#define UI_COL_ACCENT2   (g_theme.accent2)   // secondary blue accent (flights)
+#define UI_COL_ACCENT_LT (g_theme.accentLt)  // light-blue accent / outline
+#define UI_COL_ACCENT_CY (g_theme.accentCy)  // cyan accent (tags / links)
+#define UI_COL_GOOD      (g_theme.good)      // green (good / distance)
+#define UI_COL_WARN      (g_theme.warn)      // amber (warning / stale)
+
+// --- Themes -------------------------------------------------------------------
+enum UiThemeId : uint8_t {
+    THEME_MIDNIGHT = 0,   // default dark (original scheme)
+    THEME_GRAPHITE,       // neutral dark
+    THEME_DAYLIGHT,       // light, cool
+    THEME_PARCHMENT,      // light, warm
+    THEME_COUNT
+};
+extern const UiPalette   kThemes[THEME_COUNT];
+extern const char *const kThemeNames[THEME_COUNT];
+
+// Copy kThemes[id] into g_theme (clamped to a valid id). Call before building UI.
+void ui_theme_apply(uint8_t id);
 
 // --- Fonts --------------------------------------------------------------------
 // Compiled sizes (see lv_conf.h): 12, 14, 16, 20, 28, 48. (22 is NOT compiled.)

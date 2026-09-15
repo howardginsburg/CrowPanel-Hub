@@ -2,13 +2,10 @@
 
 A touchscreen desk dashboard for the **Elecrow CrowPanel ESP32 HMI 5.0"** display,
 built with **PlatformIO + LVGL**. It shows the time, local weather, **live aircraft
-flying nearby (with tail numbers)**, your calendar, market tickers, air/environment
-readings, and a rotating **photo frame** of nature shots — all configured from a phone or
-laptop through a built-in web page (no code edits, no re-flashing to change settings).
-
-> **Status:** working prototype. Board bring-up (display, touch, LVGL shell), Wi-Fi
-> provisioning, the web config portal, and every data tab — clock/weather, flights radar,
-> calendar, tickers, air/UV, and the photo frame — are implemented.
+flying nearby (with tail numbers)**, your calendars, market tickers, air/environment
+readings, and a rotating **photo frame** of nature shots — with pop-up **severe-weather
+alerts** and four selectable **color themes**, all configured from a phone or laptop
+through a built-in web page (no code edits, no re-flashing to change settings).
 
 > 🛠️ **All the technical detail** — pin map, display driver, module design, data flow,
 > build config — lives in **[architecture.md](architecture.md)**. This README is the
@@ -46,12 +43,16 @@ A left-sidebar, multi-page LVGL dashboard:
 |---|---|---|
 | **Home** | Big local time + date, current weather, sun/moon, hourly outlook | NTP + Open-Meteo |
 | **Flights** | Live radar of nearby aircraft — tail number, type, altitude, distance | adsb.fi |
-| **Calendar** | Upcoming events | your `.ics` feed |
+| **Calendar** | Upcoming events from one or more color-coded feeds (List/Day/Week/Month) | your `.ics` feeds |
 | **Tickers** | Stock / crypto prices with sparklines | Yahoo Finance |
 | **Air** | US air-quality index + UV | Open-Meteo |
 | **Photo** | Full-screen nature photo frame, auto-rotating (default 60 s) | LoremFlickr (or any JPEG URL) |
 | **Diag** | Uptime, heap/PSRAM, Wi-Fi, reset reason, firmware | on-device |
 | **Config** | Where to configure the device (URL + QR) | — |
+
+A pop-up banner surfaces **US severe-weather alerts** (National Weather Service) over any
+tab, and the whole UI can be re-skinned with one of four **color themes** — two dark
+(*Midnight*, *Graphite*) and two light (*Daylight*, *Parchment*).
 
 All data APIs are **keyless**. Flight data is credited to **adsb.fi** (non-commercial use).
 
@@ -71,7 +72,7 @@ calendar, IP/MAC) are blurred.
 </tr>
 <tr>
 <td><img src="media/flights.png" width="400"><br><b>Flights</b> — live ADS-B radar of aircraft overhead; the nearest flight (tail #, type, altitude, speed) is called out on the left. Pinch the range 1–250 NM.</td>
-<td><img src="media/calendar.png" width="400"><br><b>Calendar</b> — upcoming events from your <code>.ics</code> feed, with the next event highlighted and List/Day/Week/Month views.</td>
+<td><img src="media/calendar.png" width="400"><br><b>Calendar</b> — upcoming events from one or more color-coded <code>.ics</code> feeds, with the next event highlighted and List/Day/Week/Month views.</td>
 </tr>
 <tr>
 <td><img src="media/tickers.png" width="400"><br><b>Tickers</b> — stock/crypto quotes with intraday sparklines and day range; selectable 1D–1Y timeframe.</td>
@@ -108,7 +109,8 @@ Everything is set from a **web page** — nothing is typed on the touchscreen. O
 boot the device starts a **`CrowPanel-setup`** Wi-Fi hotspot with a captive portal; join
 it from your phone (the screen shows a QR code) and enter your home Wi-Fi and location.
 After that, open **`http://crowpanel.local`** from any device on your network to change
-any setting. Hold **BOOT (~5 s at power-on)** to wipe Wi-Fi and return to setup.
+any setting — location, calendars, tickers, photo source, severe-weather alerts, and the
+color theme. Hold **BOOT (~5 s at power-on)** to wipe Wi-Fi and return to setup.
 
 The full provisioning model and web-portal internals are in
 [architecture.md](architecture.md).
@@ -138,6 +140,7 @@ On first boot the screen shows the **Config** tab with setup instructions — jo
 - Board & examples: **Elecrow** ([wiki](https://www.elecrow.com/wiki/), [GitHub](https://github.com/Elecrow-RD))
 - Flight data: **[adsb.fi](https://adsb.fi/)** (credit required, non-commercial)
 - Weather / air / UV: **[Open-Meteo](https://open-meteo.com/)**
+- Severe-weather alerts: **US [National Weather Service](https://www.weather.gov/)** (api.weather.gov)
 - Tickers: **Yahoo Finance** chart API
 - Photo frame: **[LoremFlickr](https://loremflickr.com/)** (default source; any JPEG URL works)
 - **[LVGL](https://lvgl.io/)**, **[ArduinoJson](https://arduinojson.org/)**,

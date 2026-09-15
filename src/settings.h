@@ -45,6 +45,7 @@ struct Settings {
     // Device
     uint8_t  brightness;       // 0..255
     uint16_t pollSeconds;      // data refresh cadence
+    uint8_t  theme;            // UI color theme index (UiThemeId; 0 = Midnight)
 
     // On-device view state (not exposed in the web portal)
     uint8_t  tickerTf;         // Ticker timeframe index (0=1D .. 4=1Y)

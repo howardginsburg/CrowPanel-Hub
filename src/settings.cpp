@@ -64,6 +64,7 @@ static void apply_defaults() {
     s_cfg.alertDismissMin  = 10;
     s_cfg.brightness   = 200;
     s_cfg.pollSeconds  = 60;
+    s_cfg.theme        = 0;          // Midnight
     s_cfg.tickerTf     = 0;
     s_cfg.calView      = 0;
     s_cfg.lastPanel    = 0;
@@ -104,6 +105,7 @@ static const FieldDesc FIELDS[] = {
     { FType::U16,  &s_cfg.alertDismissMin,  "alrtDis",  "alertDismissMin",  true,  0, 1440 },
     { FType::U8,   &s_cfg.brightness,       "bright",   "brightness",       true,  0, 0 },
     { FType::U16,  &s_cfg.pollSeconds,      "poll",     "pollSeconds",      true,  20, 0 },
+    { FType::U8,   &s_cfg.theme,            "theme",    "theme",            true,  0, 3 },  // 0..THEME_COUNT-1 (UiThemeId)
     { FType::U8,   &s_cfg.tickerTf,         "tickTf",   nullptr,            false, 0, 0 },
     { FType::U8,   &s_cfg.calView,          "calView",  nullptr,            false, 0, 0 },
     { FType::U8,   &s_cfg.lastPanel,        "lastPage", nullptr,            false, 0, 0 },
