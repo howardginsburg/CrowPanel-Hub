@@ -8,6 +8,7 @@
 #include "display.h"
 #include "touch_gt911.h"
 #include "board_pins.h"
+#include "settings.h"
 #include <Arduino.h>
 #include <lvgl.h>
 #include "esp_lcd_panel_ops.h"
@@ -29,6 +30,13 @@ static lv_disp_draw_buf_t s_draw_buf;
 // first, then wait one VSYNC. No semaphores needed.
 static volatile uint32_t s_vsync_count = 0;
 static volatile uint32_t s_frame_count = 0;    // full frames presented (Diag FPS)
+
+// Idle-dim state. All touched only on core 1 (touch_cb + display_dim_tick under
+// ui_lock), so no atomics needed. s_swallow eats the wake gesture so the touch
+// that brightens the screen doesn't also activate a widget.
+static uint32_t s_lastActivityMs = 0;
+static bool     s_dimmed  = false;
+static bool     s_swallow = false;
 
 static bool IRAM_ATTR on_vsync(esp_lcd_panel_handle_t panel,
                                const esp_lcd_rgb_panel_event_data_t *edata,
@@ -67,16 +75,56 @@ const void *display_front_framebuffer() { return (const void *)s_front_fb; }
 static void touch_cb(lv_indev_drv_t *drv, lv_indev_data_t *data) {
     TouchPoint p = touch_read();
     if (p.touched) {
+        s_lastActivityMs = millis();
+        // A touch while dimmed is "wake only": restore brightness and swallow the
+        // whole gesture so the underlying widget is never activated.
+        if (s_dimmed) {
+            display_wake();
+            s_swallow = true;
+        }
+        if (s_swallow) {
+            data->state = LV_INDEV_STATE_RELEASED;   // hide the waking press from LVGL
+            return;
+        }
         data->state = LV_INDEV_STATE_PRESSED;
         data->point.x = p.x;
         data->point.y = p.y;
     } else {
+        s_swallow = false;   // finger lifted -> resume forwarding future presses
         data->state = LV_INDEV_STATE_RELEASED;
     }
 }
 
 void display_set_brightness(uint8_t level) {
     ledcWrite(PIN_BACKLIGHT, level);
+}
+
+// Restore full brightness and leave the dimmed state. Safe to call any time.
+void display_wake() {
+    s_lastActivityMs = millis();
+    if (s_dimmed) {
+        s_dimmed = false;
+        display_set_brightness(settings().brightness);
+    }
+}
+
+// Idle-dim state machine. Pump once per loop() under ui_lock(). dimMinutes == 0
+// disables the feature (and un-dims if currently dimmed).
+void display_dim_tick() {
+    uint16_t mins = settings().dimMinutes;
+    if (mins == 0) {
+        if (s_dimmed) {
+            s_dimmed = false;
+            display_set_brightness(settings().brightness);
+        }
+        return;
+    }
+    if (!s_dimmed && millis() - s_lastActivityMs >= (uint32_t)mins * 60000UL) {
+        uint8_t normal = settings().brightness;
+        uint8_t dim = (uint8_t)((uint32_t)normal * settings().dimPercent / 100);
+        s_dimmed = true;
+        display_set_brightness(dim);
+    }
 }
 
 static void panel_init() {
@@ -150,6 +198,8 @@ static void panel_init() {
 void display_init() {
     // Backlight PWM (Arduino 3.x LEDC API).
     ledcAttach(PIN_BACKLIGHT, 44100, 8);
+
+    s_lastActivityMs = millis();   // start the idle-dim window from boot
 
     panel_init();
     display_set_brightness(200);

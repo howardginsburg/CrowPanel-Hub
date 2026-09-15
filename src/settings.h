@@ -44,6 +44,8 @@ struct Settings {
 
     // Device
     uint8_t  brightness;       // 0..255
+    uint16_t dimMinutes;       // idle minutes before dimming (0 = disabled)
+    uint8_t  dimPercent;       // dim to this % of normal brightness (0..100)
     uint16_t pollSeconds;      // data refresh cadence
     uint8_t  theme;            // UI color theme index (UiThemeId; 0 = Midnight)
 

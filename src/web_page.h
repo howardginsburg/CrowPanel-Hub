@@ -117,6 +117,10 @@ static const char CONFIG_PAGE[] PROGMEM = R"HTML(<!DOCTYPE html>
       </select>
       <label>Brightness (0&ndash;255)</label>
       <input id="brightness" type="number" min="10" max="255">
+      <label>Dim screen after (minutes idle, 0 = never)</label>
+      <input id="dimMinutes" type="number" min="0" max="1440">
+      <label>Dim to (% of brightness)</label>
+      <input id="dimPercent" type="number" min="0" max="100">
       <label>Config PIN <small>(optional; blank = no PIN)</small></label>
       <input id="configPin" placeholder="e.g. 1234">
     </fieldset>

@@ -13,6 +13,12 @@ void display_tick();
 // Backlight brightness, 0..255. Persisted brightness is applied by the caller.
 void display_set_brightness(uint8_t level);
 
+// Idle auto-dim. Pump display_dim_tick() once per loop() (under ui_lock()); it
+// dims to settings().dimPercent of normal brightness after settings().dimMinutes
+// of no touch (0 = disabled). display_wake() restores full brightness on demand.
+void display_dim_tick();
+void display_wake();
+
 // Full frames presented to the panel so far (one per LVGL flush). The Diag page
 // samples this to compute an on-device render FPS.
 uint32_t display_frame_count();

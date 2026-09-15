@@ -56,6 +56,7 @@ void loop() {
     // net task's ui_* setters.
     ui_lock();
     ui_tick();
+    display_dim_tick();
     display_tick();
     ui_unlock();
     delay(5);

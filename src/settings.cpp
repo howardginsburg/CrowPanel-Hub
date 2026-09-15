@@ -63,6 +63,8 @@ static void apply_defaults() {
     s_cfg.alertMinSeverity = 3;      // Severe & above
     s_cfg.alertDismissMin  = 10;
     s_cfg.brightness   = 200;
+    s_cfg.dimMinutes   = 5;          // dim after 5 min idle
+    s_cfg.dimPercent   = 20;         // dim to 20% of normal brightness
     s_cfg.pollSeconds  = 60;
     s_cfg.theme        = 0;          // Midnight
     s_cfg.tickerTf     = 0;
@@ -104,6 +106,8 @@ static const FieldDesc FIELDS[] = {
     { FType::U8,   &s_cfg.alertMinSeverity, "alrtSev",  "alertMinSeverity", true,  0, 0 },  // reset-to-3 handled below
     { FType::U16,  &s_cfg.alertDismissMin,  "alrtDis",  "alertDismissMin",  true,  0, 1440 },
     { FType::U8,   &s_cfg.brightness,       "bright",   "brightness",       true,  0, 0 },
+    { FType::U16,  &s_cfg.dimMinutes,       "dimMin",   "dimMinutes",       true,  0, 1440 },
+    { FType::U8,   &s_cfg.dimPercent,       "dimPct",   "dimPercent",       true,  0, 0 },  // clamp to 100 below
     { FType::U16,  &s_cfg.pollSeconds,      "poll",     "pollSeconds",      true,  20, 0 },
     { FType::U8,   &s_cfg.theme,            "theme",    "theme",            true,  0, 3 },  // 0..THEME_COUNT-1 (UiThemeId)
     { FType::U8,   &s_cfg.tickerTf,         "tickTf",   nullptr,            false, 0, 0 },
@@ -252,6 +256,8 @@ bool settings_import_json(const String &json) {
     }
     // Severity is reset (not clamped) to the default when out of range.
     if (s_cfg.alertMinSeverity < 1 || s_cfg.alertMinSeverity > 4) s_cfg.alertMinSeverity = 3;
+    // dimPercent is a U8 (not covered by the U16 clamp loop); bound it explicitly.
+    if (s_cfg.dimPercent > 100) s_cfg.dimPercent = 100;
     return true;
 }
 
