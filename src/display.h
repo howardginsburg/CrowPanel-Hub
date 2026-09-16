@@ -13,9 +13,12 @@ void display_tick();
 // Backlight brightness, 0..255. Persisted brightness is applied by the caller.
 void display_set_brightness(uint8_t level);
 
-// Idle auto-dim. Pump display_dim_tick() once per loop() (under ui_lock()); it
-// dims to settings().dimPercent of normal brightness after settings().dimMinutes
-// of no touch (0 = disabled). display_wake() restores full brightness on demand.
+// Idle + night auto-dim. Pump display_dim_tick() once per loop() (under
+// ui_lock()). It resolves two layers into one backlight target: idle-dim (to
+// settings().dimPercent after settings().dimMinutes of no touch; 0 = disabled)
+// and night-dim (to settings().nightDimPercent during the configured local
+// hours). A touch wakes to normal brightness and returns to the dim level once
+// idle again. display_wake() restores full brightness on demand.
 void display_dim_tick();
 void display_wake();
 

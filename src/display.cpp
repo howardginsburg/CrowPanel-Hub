@@ -16,6 +16,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_timer.h"
+#include <time.h>
 
 static esp_lcd_panel_handle_t s_panel = nullptr;
 static lv_color_t *s_fb0 = nullptr;
@@ -31,12 +32,16 @@ static lv_disp_draw_buf_t s_draw_buf;
 static volatile uint32_t s_vsync_count = 0;
 static volatile uint32_t s_frame_count = 0;    // full frames presented (Diag FPS)
 
-// Idle-dim state. All touched only on core 1 (touch_cb + display_dim_tick under
-// ui_lock), so no atomics needed. s_swallow eats the wake gesture so the touch
-// that brightens the screen doesn't also activate a widget.
+// Auto-dim state. Touched only on core 1 (touch_cb + display_dim_tick under
+// ui_lock), so no atomics needed. Two dim layers stack: idle-dim (after N idle
+// minutes) and night-dim (during configured local hours). display_dim_tick()
+// resolves them into one target brightness each tick. s_autoDimmed is true
+// whenever the screen sits below normal, so touch_cb can wake + swallow the
+// gesture. s_swallow eats the waking touch so it doesn't activate a widget.
 static uint32_t s_lastActivityMs = 0;
-static bool     s_dimmed  = false;
-static bool     s_swallow = false;
+static bool     s_autoDimmed = false;
+static bool     s_swallow    = false;
+static uint8_t  s_appliedLevel = 255;   // last brightness written to the backlight
 
 static bool IRAM_ATTR on_vsync(esp_lcd_panel_handle_t panel,
                                const esp_lcd_rgb_panel_event_data_t *edata,
@@ -76,9 +81,9 @@ static void touch_cb(lv_indev_drv_t *drv, lv_indev_data_t *data) {
     TouchPoint p = touch_read();
     if (p.touched) {
         s_lastActivityMs = millis();
-        // A touch while dimmed is "wake only": restore brightness and swallow the
-        // whole gesture so the underlying widget is never activated.
-        if (s_dimmed) {
+        // A touch while auto-dimmed is "wake only": restore brightness and
+        // swallow the whole gesture so the underlying widget is never activated.
+        if (s_autoDimmed) {
             display_wake();
             s_swallow = true;
         }
@@ -99,32 +104,63 @@ void display_set_brightness(uint8_t level) {
     ledcWrite(PIN_BACKLIGHT, level);
 }
 
-// Restore full brightness and leave the dimmed state. Safe to call any time.
+// True when the local clock is within the configured night window. Handles a
+// window that wraps midnight (start > end). Returns false until NTP has synced.
+static bool night_active_now() {
+    if (!settings().nightDimEnabled) return false;
+    uint8_t s = settings().nightStartHour, e = settings().nightEndHour;
+    if (s == e) return false;                 // empty window
+    time_t now = time(nullptr);
+    if (now < 100000) return false;           // clock not synced yet
+    struct tm t; localtime_r(&now, &t);
+    int h = t.tm_hour;
+    return (s < e) ? (h >= s && h < e)        // same-day window
+                   : (h >= s || h < e);       // wraps past midnight
+}
+
+// Resolve the two dim layers into a single backlight target (0..255). The screen
+// rests at normal brightness while recently touched, then drops to whichever
+// active layer is dimmest: daytime idle-dim after dimMinutes, and/or night-dim
+// during the configured hours (reusing the idle grace so a touch wakes to normal
+// and returns to the night level once idle again).
+static uint8_t compute_target() {
+    uint8_t  normal = settings().brightness;
+    uint32_t idleMs = millis() - s_lastActivityMs;
+    uint16_t mins   = settings().dimMinutes;
+
+    uint16_t pct = 100;
+    if (mins > 0 && idleMs >= (uint32_t)mins * 60000UL)
+        pct = settings().dimPercent;                          // daytime idle-dim
+
+    if (night_active_now()) {
+        // Wake to normal on touch, return to the night level after a grace
+        // period (the idle timeout, or 1 min if idle-dim is disabled).
+        uint32_t graceMs = (uint32_t)(mins > 0 ? mins : 1) * 60000UL;
+        if (idleMs >= graceMs && settings().nightDimPercent < pct)
+            pct = settings().nightDimPercent;                 // night-dim (deeper)
+    }
+    return (uint8_t)((uint32_t)normal * pct / 100);
+}
+
+// Restore full brightness and clear the auto-dimmed state. Safe to call any time.
 void display_wake() {
     s_lastActivityMs = millis();
-    if (s_dimmed) {
-        s_dimmed = false;
-        display_set_brightness(settings().brightness);
+    if (s_autoDimmed) {
+        s_autoDimmed = false;
+        s_appliedLevel = settings().brightness;
+        display_set_brightness(s_appliedLevel);
     }
 }
 
-// Idle-dim state machine. Pump once per loop() under ui_lock(). dimMinutes == 0
-// disables the feature (and un-dims if currently dimmed).
+// Dim state machine. Pump once per loop() under ui_lock(). Applies the resolved
+// target only when it changes, so it never fights the portal's brightness write.
 void display_dim_tick() {
-    uint16_t mins = settings().dimMinutes;
-    if (mins == 0) {
-        if (s_dimmed) {
-            s_dimmed = false;
-            display_set_brightness(settings().brightness);
-        }
-        return;
+    uint8_t target = compute_target();
+    if (target != s_appliedLevel) {
+        s_appliedLevel = target;
+        display_set_brightness(target);
     }
-    if (!s_dimmed && millis() - s_lastActivityMs >= (uint32_t)mins * 60000UL) {
-        uint8_t normal = settings().brightness;
-        uint8_t dim = (uint8_t)((uint32_t)normal * settings().dimPercent / 100);
-        s_dimmed = true;
-        display_set_brightness(dim);
-    }
+    s_autoDimmed = (target < settings().brightness);
 }
 
 static void panel_init() {

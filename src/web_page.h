@@ -121,6 +121,13 @@ static const char CONFIG_PAGE[] PROGMEM = R"HTML(<!DOCTYPE html>
       <input id="dimMinutes" type="number" min="0" max="1440">
       <label>Dim to (% of brightness)</label>
       <input id="dimPercent" type="number" min="0" max="100">
+      <div class="chk"><input id="nightDimEnabled" type="checkbox"><label style="margin:0">Dim more at night</label></div>
+      <div class="row">
+        <div><label>Night start (hour 0&ndash;23)</label><input id="nightStartHour" type="number" min="0" max="23"></div>
+        <div><label>Night end (hour 0&ndash;23)</label><input id="nightEndHour" type="number" min="0" max="23"></div>
+      </div>
+      <label>Night dim to (% of brightness)</label>
+      <input id="nightDimPercent" type="number" min="0" max="100">
       <label>Config PIN <small>(optional; blank = no PIN)</small></label>
       <input id="configPin" placeholder="e.g. 1234">
     </fieldset>
