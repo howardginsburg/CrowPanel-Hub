@@ -2575,8 +2575,12 @@ static void update_clock() {
     struct tm t;
     localtime_r(&now, &t);
     char buf[16];
-    if (settings().use24hClock) strftime(buf, sizeof(buf), "%H:%M", &t);
-    else                        strftime(buf, sizeof(buf), "%I:%M %p", &t);
+    if (settings().use24hClock) {
+        snprintf(buf, sizeof(buf), "%d:%02d", t.tm_hour, t.tm_min);
+    } else {
+        int h12 = t.tm_hour % 12; if (h12 == 0) h12 = 12;
+        snprintf(buf, sizeof(buf), "%d:%02d %s", h12, t.tm_min, t.tm_hour < 12 ? "AM" : "PM");
+    }
     lv_label_set_text(s_home.clockTime, buf);
     char dbuf[48];
     strftime(dbuf, sizeof(dbuf), "%A, %B %d", &t);

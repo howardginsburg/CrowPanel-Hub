@@ -82,6 +82,7 @@ static void handle_post_config(AsyncWebServerRequest *req, uint8_t *data, size_t
 
     String prevSsid = settings().wifiSsid;
     String prevPass = settings().wifiPass;
+    uint8_t prevTheme = settings().theme;
     if (!settings_import_json(body)) {
         send_json_error(req, 400, "json");
         return;
@@ -92,7 +93,11 @@ static void handle_post_config(AsyncWebServerRequest *req, uint8_t *data, size_t
     if (settings().wifiSsid != prevSsid || settings().wifiPass != prevPass) {
         s_wifiChanged = true;
     }
-    req->send(200, "application/json", "{\"ok\":true}");
+    // The theme is only applied at boot (ui_theme_apply in setup); a live change
+    // needs a reboot. Tell the portal so it can prompt the user.
+    bool themeChanged = settings().theme != prevTheme;
+    req->send(200, "application/json",
+              String("{\"ok\":true,\"rebootForTheme\":") + (themeChanged ? "true" : "false") + "}");
 }
 
 // Captive-portal helper: send any unknown host to the config page.

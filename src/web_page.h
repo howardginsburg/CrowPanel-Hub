@@ -241,7 +241,13 @@ $('f').addEventListener('submit', async e => {
   try {
     const r = await fetch('/api/config', { method:'POST',
       headers:{'Content-Type':'application/json'}, body: JSON.stringify(body) });
-    if (r.ok) { st.textContent = 'Saved. The device will apply changes / reconnect.'; st.className = 'ok'; }
+    if (r.ok) {
+      const j = await r.json().catch(() => ({}));
+      st.textContent = j.rebootForTheme
+        ? 'Saved. Reboot the device to apply the new theme.'
+        : 'Saved. The device will apply changes / reconnect.';
+      st.className = 'ok';
+    }
     else { st.textContent = 'Save failed ('+r.status+').'; st.className = 'err'; }
   } catch (err) { st.textContent = 'Network error.'; st.className = 'err'; }
 });
