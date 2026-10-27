@@ -18,8 +18,8 @@ int photo_width();
 int photo_height();
 
 // Download the configured (or default) image and decode it into the buffer.
-// Returns true on success; the buffer is left untouched on failure so the
-// previous photo stays on screen. Blocking (runs on the main loop).
+// Returns true on success; download failures leave the previous photo untouched.
+// Blocking (runs on the network task).
 bool photo_fetch();
 
 // Human-readable status of the last fetch ("OK", "HTTP 404", "Decode failed"...).

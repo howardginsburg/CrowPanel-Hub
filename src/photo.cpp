@@ -13,13 +13,10 @@
 #include <HTTPClient.h>
 #include <JPEGDEC.h>
 #include <esp_heap_caps.h>
-
-// Default keyless nature source. Returns a fresh random nature photo per request
-// (302-redirects to a CDN image), so rotation shows a different photo each time.
-static const char *PHOTO_DEFAULT_URL = "https://loremflickr.com/800/436/nature";
+#include <esp_random.h>
 
 // Scratch buffer for the raw JPEG bytes. 512 KB comfortably holds an 800x436
-// nature JPEG (typically 60-200 KB).
+// JPEG (typically 60-200 KB).
 #define PHOTO_JPEG_MAX (512 * 1024)
 
 static uint16_t *s_fb   = nullptr;   // RGB565 framebuffer (PHOTO_W * PHOTO_H)
@@ -67,21 +64,25 @@ static int photo_draw_cb(JPEGDRAW *pDraw) {
 static size_t photo_download(const String &url) {
     WiFiClientSecure client;
     HTTPClient https;
-    HttpOpts opts; opts.readTimeoutMs = 10000; opts.followRedirects = true;
+    // An uncached photo also needs an upstream fetch and JPEG conversion.
+    HttpOpts opts; opts.readTimeoutMs = 20000; opts.followRedirects = true;
     opts.userAgent = "CrowPanel/1.0";
     if (!http_begin(client, https, url, opts)) {
         snprintf(s_status, sizeof(s_status), "Bad URL");
         return 0;
     }
+    // The raw stream below needs an unchunked body, including for custom URLs.
+    https.useHTTP10(true);
 
     int code = https.GET();
     if (code != HTTP_CODE_OK) {
-        snprintf(s_status, sizeof(s_status), "HTTP %d", code);
+        if (code < 0) snprintf(s_status, sizeof(s_status), "Network: %s", HTTPClient::errorToString(code).c_str());
+        else snprintf(s_status, sizeof(s_status), "HTTP %d", code);
         https.end();
         return 0;
     }
 
-    int len = https.getSize();          // -1 when chunked
+    int len = https.getSize();          // -1 when the length is unknown
     Stream *stream = https.getStreamPtr();
     size_t got = 0;
     uint32_t last = millis();
@@ -99,6 +100,10 @@ static size_t photo_download(const String &url) {
     }
     https.end();
 
+    if (len > 0 && got != (size_t)len) {
+        snprintf(s_status, sizeof(s_status), "Incomplete response");
+        return 0;
+    }
     if (got < 100) { snprintf(s_status, sizeof(s_status), "Empty response"); return 0; }
     return got;
 }
@@ -108,10 +113,26 @@ bool photo_fetch() {
     if (!s_fb || !s_jpg) { snprintf(s_status, sizeof(s_status), "No memory"); return false; }
 
     String url = settings().photoUrl; url.trim();
-    if (!url.length()) url = PHOTO_DEFAULT_URL;
+    bool useDefault = !url.length();
+    if (useDefault) {
+        // A fresh seed bypasses CDN caches, including across reboots. wsrv.nl
+        // converts Picsum's progressive JPEGs to the baseline format JPEGDEC needs.
+        char defaultUrl[128];
+        snprintf(defaultUrl, sizeof(defaultUrl),
+                 "https://wsrv.nl/?url=picsum.photos/seed/%08lx%08lx/%d/%d.jpg&output=jpg",
+                 (unsigned long)esp_random(), (unsigned long)esp_random(), PHOTO_W, PHOTO_H);
+        url = defaultUrl;
+    }
 
     size_t len = photo_download(url);
-    if (!len) return false;
+    if (!len && useDefault) {
+        Serial.printf("[photo] default download failed: %s; retrying once\n", s_status);
+        len = photo_download(url);
+    }
+    if (!len) {
+        Serial.printf("[photo] download failed: %s\n", s_status);
+        return false;
+    }
 
     if (s_jpeg.openRAM(s_jpg, (int)len, photo_draw_cb) == 0) {
         snprintf(s_status, sizeof(s_status), "Not a JPEG");

@@ -34,7 +34,7 @@ struct Settings {
     bool     use24hClock;
 
     // Photo frame
-    String   photoUrl;         // JPEG source (blank = built-in nature default)
+    String   photoUrl;         // JPEG source (blank = random Lorem Picsum photos)
     uint16_t photoSeconds;     // rotate cadence (>= 10s)
 
     // Severe weather alerts (US only, NWS)

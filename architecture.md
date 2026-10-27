@@ -4,7 +4,7 @@ A wall/desk information dashboard running on the **Elecrow CrowPanel ESP32 HMI 5
 (module **DIS07050H**): an 800×480 parallel-RGB touchscreen driven by an ESP32-S3, built
 with **PlatformIO + LVGL 8.3**. It shows eight tabs — Home (clock + weather + sun/moon +
 hourly), Flights (live ADS-B radar), Calendar (color-coded iCal feeds), Tickers
-(stock/crypto sparklines), Air (US AQI + UV), Photo (auto-rotating nature photo frame),
+(stock/crypto sparklines), Air (US AQI + UV), Photo (auto-rotating random photo frame),
 Diag (device stats), and Config (Wi-Fi setup QR + web portal). A pop-up banner surfaces US
 severe-weather alerts (NWS), and the whole UI is re-skinnable via four selectable color
 themes applied at boot.
@@ -382,7 +382,7 @@ All feeds are **keyless** and fetched over HTTPS (`WiFiClientSecure::setInsecure
 | Tickers | Yahoo Finance chart API (`query1.finance.yahoo.com/v8/finance/chart/{sym}`) | Needs a `User-Agent` header or it 403s |
 | Alerts | US NWS (`api.weather.gov/alerts/active?point={lat},{lon}`) | US-only, keyless; **requires a descriptive `User-Agent`** or it 403s. Polled every 120 s independently of the focused tab |
 | Calendar | one or more user-supplied public `.ics` URLs (up to 8, color-coded) | Streamed, not buffered into JSON |
-| Photo | LoremFlickr (`loremflickr.com/800/436/nature`) or any user-supplied JPEG URL | Follows redirects; binary JPEG, decoded with JPEGDEC |
+| Photo | Random Lorem Picsum photographs via `wsrv.nl`, or a user-supplied JPEG URL | Built-in images are converted to baseline JPEG; follows redirects and decodes with JPEGDEC |
 
 adsb.fi fields used: `r` (registration / tail #, falls back to the `flight` callsign), `t`
 (type), `alt_baro`, `lat`, `lon`. The Flights tab shows a small "data: adsb.fi" credit as
@@ -452,8 +452,16 @@ Downloads a JPEG over HTTPS into a 512 KB PSRAM scratch buffer, then decodes it 
 **JPEGDEC** directly into a PSRAM RGB565 framebuffer (800×436) that the UI binds to a
 canvas. The image is power-of-two downscaled to fit and centred (smaller images get a
 black border, larger ones are clipped). `photo_fetch()` follows redirects and leaves the
-previous photo on screen if a fetch fails. Pixel byte order is `RGB565_LITTLE_ENDIAN` to
-match `LV_COLOR_16_SWAP=0`.
+previous photo on screen if a download fails. With a blank source URL, every rotation
+requests a random photograph from Lorem Picsum's full catalogue, using a fresh 64-bit
+hardware-random seed in the source URL so CDN caches cannot pin the slideshow to one
+image or repeat a fixed sequence after reboot. wsrv.nl converts the image to a baseline
+JPEG; JPEGDEC only supports DC-thumbnail decoding of progressive JPEGs. Custom URLs
+are fetched directly. The default request is retried once on download failure, reusing
+the same seed, with failures logged to serial. Downloads allow a bounded 20-second
+response timeout for uncached fetch/conversion, use HTTP/1.0 so the raw JPEG stream has
+no chunk framing, and reject incomplete bodies with a known content length. Pixel byte
+order is `RGB565_LITTLE_ENDIAN` to match `LV_COLOR_16_SWAP=0`.
 
 ### `data.cpp` / `data.h` — network data services
 NTP time plus all HTTPS JSON polling behind the per-tab descriptor table (§6.2).

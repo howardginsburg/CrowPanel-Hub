@@ -839,7 +839,7 @@ static void poll_calendar() {
 }
 
 // -------------------------------------------------------------------- photo ---
-// Download + decode the next nature photo into the shared PSRAM framebuffer,
+// Download + decode the next photo into the shared PSRAM framebuffer,
 // then tell the UI to repaint (or show the error status).
 static void poll_photo() {
     bool ok = photo_fetch();

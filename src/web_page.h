@@ -84,8 +84,8 @@ static const char CONFIG_PAGE[] PROGMEM = R"HTML(<!DOCTYPE html>
       <input id="tickers" placeholder="MSFT,AAPL,NVDA">
       <label>Refresh interval (seconds)</label>
       <input id="pollSeconds" type="number" min="20" max="3600">
-      <label>Photo frame source URL <small>(blank = built-in nature)</small></label>
-      <input id="photoUrl" placeholder="https://loremflickr.com/800/436/nature">
+      <label>Photo frame source URL <small>(blank = random photos from Lorem Picsum)</small></label>
+      <input id="photoUrl" placeholder="Leave blank for random photos">
       <label>Photo rotate interval (seconds)</label>
       <input id="photoSeconds" type="number" min="10" max="3600">
       <div class="chk"><input id="useMetric" type="checkbox"><label style="margin:0">Metric units</label></div>

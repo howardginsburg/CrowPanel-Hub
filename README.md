@@ -3,7 +3,7 @@
 A touchscreen desk dashboard for the **Elecrow CrowPanel ESP32 HMI 5.0"** display,
 built with **PlatformIO + LVGL**. It shows the time, local weather, **live aircraft
 flying nearby (with tail numbers)**, your calendars, market tickers, air/environment
-readings, and a rotating **photo frame** of nature shots — with pop-up **severe-weather
+readings, and a rotating **photo frame** of random photographs — with pop-up **severe-weather
 alerts** and four selectable **color themes**, all configured from a phone or laptop
 through a built-in web page (no code edits, no re-flashing to change settings).
 
@@ -46,7 +46,7 @@ A left-sidebar, multi-page LVGL dashboard:
 | **Calendar** | Upcoming events from one or more color-coded feeds (List/Day/Week/Month) | your `.ics` feeds |
 | **Tickers** | Stock / crypto prices with sparklines | Yahoo Finance |
 | **Air** | US air-quality index + UV | Open-Meteo |
-| **Photo** | Full-screen nature photo frame, auto-rotating (default 60 s) | LoremFlickr (or any JPEG URL) |
+| **Photo** | Full-screen random photo frame, auto-rotating (default 60 s) | Lorem Picsum via wsrv.nl (or a custom JPEG URL) |
 | **Diag** | Uptime, heap/PSRAM, Wi-Fi, reset reason, firmware | on-device |
 | **Config** | Where to configure the device (URL + QR) | — |
 
@@ -79,7 +79,7 @@ calendar, IP/MAC) are blurred.
 <td><img src="media/air.png" width="400"><br><b>Air</b> — US AQI gauge and UV index with a PM2.5 / PM10 / ozone / NO₂ breakdown.</td>
 </tr>
 <tr>
-<td><img src="media/photo.png" width="400"><br><b>Photo</b> — full-bleed nature photo frame that auto-rotates on a configurable interval.</td>
+<td><img src="media/photo.png" width="400"><br><b>Photo</b> — full-bleed photo frame that auto-rotates on a configurable interval.</td>
 <td><img src="media/diagnostics.png" width="400"><br><b>Diag</b> — live device stats: uptime, free heap/PSRAM, Wi-Fi RSSI, die temp and render FPS.</td>
 </tr>
 </table>
@@ -115,6 +115,11 @@ color theme. Hold **BOOT (~5 s at power-on)** to wipe Wi-Fi and return to setup.
 The full provisioning model and web-portal internals are in
 [architecture.md](architecture.md).
 
+Leave the photo source URL blank to fetch random photographs from Lorem Picsum's
+full catalogue, not a fixed collection. Each rotation uses a fresh random seed to
+avoid cached repeats, and wsrv.nl converts the image to a full-resolution baseline
+JPEG for the panel's decoder. A custom source URL is fetched directly.
+
 ---
 
 ## Build & flash
@@ -142,7 +147,9 @@ On first boot the screen shows the **Config** tab with setup instructions — jo
 - Weather / air / UV: **[Open-Meteo](https://open-meteo.com/)**
 - Severe-weather alerts: **US [National Weather Service](https://www.weather.gov/)** (api.weather.gov)
 - Tickers: **Yahoo Finance** chart API
-- Photo frame: **[LoremFlickr](https://loremflickr.com/)** (default source; any JPEG URL works)
+- Photo frame: **[Lorem Picsum](https://picsum.photos/)** random photographs via
+  **[wsrv.nl](https://wsrv.nl/)** (baseline JPEG conversion for the built-in rotation;
+  custom JPEG URLs are fetched directly)
 - **[LVGL](https://lvgl.io/)**, **[ArduinoJson](https://arduinojson.org/)**,
   **[ESPAsyncWebServer](https://github.com/mathieucarbou/ESPAsyncWebServer)**,
   **[JPEGDEC](https://github.com/bitbank2/JPEGDEC)**,
